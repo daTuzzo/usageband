@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CacheClock, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandView } from '../types'
+import type { CacheClock, KeepWarm, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandView } from '../types'
 import {
   CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, PAL,
   bandSvg, fmtTok, menuPages, menuSvg, shortSpan, svgPx, tone,
 } from './art'
 import type { BandView, Gauge } from './art'
+import { PING_TEXT, keepWarmStep, nextKeepWarm, pingFoundCold } from './keepwarm'
 import { CACHE_TTL_MS, FAMILIES, PRICES, familyFor, formatUsd, nextMessageCost, requestCost } from './pricing'
 import type { CacheState, Family } from './pricing'
 
@@ -38,6 +39,33 @@ const page = atom({ plugin: 'usageband', key: 'page' } as const, 0)
 const mascot = atom({ plugin: 'usageband', key: 'mascot' } as const, false)
 /** The $.store key for the mascot setting; off unless chosen. */
 const STORED_MASCOT = 'showMascot'
+const keepWarm = atom({ plugin: 'usageband', key: 'keepWarm' } as const, null as KeepWarm | null)
+
+/** Whether a main-thread turn is running; set by turn.step, cleared by turn.complete. */
+let mainTurnOpen = false
+
+/** One press of the keep-warm button: off, then 2 h, 4 h, 8 h, then off again. */
+const stepKeepWarm = async ($: EngineInterface): Promise<void> => {
+  const now = await $.clock.now()
+  await update($, keepWarm, kw => nextKeepWarm(kw, now))
+}
+
+const stopKeepWarm = async ($: EngineInterface, note: string): Promise<void> => {
+  await update($, keepWarm, kw => (kw === null ? null : { ...kw, until: 0, pendingAt: 0, note }))
+}
+
+/** Runs on every redraw tick: sends a ping when the cache is one minute from cold and every guard passes. */
+const keepWarmTick = async ($: EngineInterface): Promise<void> => {
+  const kw = await read($, keepWarm)
+  if (kw === null || kw.until <= 0) return
+  const now = await $.clock.now()
+  const cache = readCache(await read($, cacheClock), now)
+  const step = keepWarmStep(kw, cache, await read($, limits), now, mainTurnOpen)
+  if (step.act === 'stop') return stopKeepWarm($, step.note)
+  if (step.act !== 'ping') return
+  await update($, keepWarm, k => (k === null ? null : { ...k, pendingAt: now }))
+  await $.prompt.submit({ text: PING_TEXT })
+}
 
 const isView = (x: unknown): x is UsagebandView => x === 'mini' || x === 'band' || x === 'open'
 
@@ -284,7 +312,11 @@ export const register: Register = on => {
     await syncLimits($)
     // /band shows a hidden band, or hides a shown one.
     await $.command.register({ name: 'band', description: 'Show or hide the usage band' })
-    $.clock.every(REDRAW_MS, () => $.ui.invalidate('ui.render'))
+    $.clock.every(REDRAW_MS, () => {
+      $.ui.invalidate('ui.render')
+      // The same tick checks the keep-warm timer; a slip there never stops the redraw.
+      keepWarmTick($).catch(() => undefined)
+    })
     return next(ready)
   })
 
@@ -322,10 +354,11 @@ export const register: Register = on => {
     return answer
   }).catch(($, begin, next) => next(begin)) // if this fails, the session starts all the same
 
-  // Counts a prompt the person sent: not a slash command, not one the engine made, not one dropped.
+  // Counts a prompt the person sent: not a slash command, not one the engine made, not a
+  // plugin's (keep-warm pings included), not one dropped.
   on('prompt.submit', async ($, sent, next) => {
     const answer = await next(sent)
-    if (!sent.isMeta && !sent.command && answer.drop === undefined) {
+    if (!sent.isMeta && !sent.command && sent.origin.kind !== 'plugin' && answer.drop === undefined) {
       await update($, counters, t => ({ ...t, prompts: t.prompts + 1 }))
     }
     return answer
@@ -333,7 +366,10 @@ export const register: Register = on => {
 
   // A main-thread request is going out: the cache is used now, so its hour restarts.
   on('turn.step', async function* ($, step, next) {
-    if (step.agentId === undefined) await stampSend($)
+    if (step.agentId === undefined) {
+      mainTurnOpen = true
+      await stampSend($)
+    }
     return yield* next(step)
   })
 
@@ -359,7 +395,19 @@ export const register: Register = on => {
       }
       return answer
     }
+    mainTurnOpen = false
     await settleTurn($, done.durationMs, used?.model ?? null)
+    // A keep-warm ping's turn: count its real cost against the budget. If it wrote the
+    // cache instead of reading it, the cache had already gone (or the session is on the
+    // 5-minute cache of usage overage), so pinging is no use: stop.
+    const kw = await read($, keepWarm)
+    if (kw !== null && kw.pendingAt > 0) {
+      const cost = used ? requestCost(used.model, used) : 0
+      await update($, keepWarm, k => (k === null ? null : { ...k, pendingAt: 0, pings: k.pings + 1, spent: k.spent + cost }))
+      if (used && pingFoundCold(used.cache_creation_input_tokens, used.cache_read_input_tokens)) {
+        await stopKeepWarm($, 'cache had expired before the ping')
+      }
+    }
     return answer
   })
 
@@ -388,6 +436,8 @@ export const register: Register = on => {
       $.ui.status(status)
     }
     const modes = ev.props.modes.join(' & ')
+    const kw = await read($, keepWarm)
+    const warming = kw !== null && kw.until > (await $.clock.now())
     return (
       <Box flexDirection="row" alignItems="center" flexShrink={0}>
         <Box key="toggle" flexShrink={0} marginRight={1}>
@@ -400,6 +450,11 @@ export const register: Register = on => {
         {v.cache ? (
           <Text key="cache" color={tone(v.cache.mode)} weight="bold">
             {`${v.cache.mode} ${v.cache.time}`}
+          </Text>
+        ) : null}
+        {warming ? (
+          <Text key="kw" dimColor>
+            {' kw'}
           </Text>
         ) : null}
         {modes ? (
@@ -421,6 +476,9 @@ export const register: Register = on => {
     const cols = ev.props.bodyColumns ?? ev.viewport?.columns ?? 100
     const v = await bandView($)
     const isOpen = (await read($, view)) === 'open'
+    const kw = await read($, keepWarm)
+    const nowMs = await $.clock.now()
+    const warmLeftMs = kw !== null && kw.until > nowMs ? kw.until - nowMs : 0
 
     // The menu opens upward, so the toggle points up while closed and down while open.
     // The toggle is the app's own primary Button; minimise is plain and quieter.
@@ -461,6 +519,17 @@ export const register: Register = on => {
                   DETAILS
                 </Text>
                 <Box key="space" flexGrow={1} />
+                {/* Keep-warm: each press steps the timer (2 h, 4 h, 8 h, off); the label counts down.
+                    After a guard stops it, the reason shows beside it until the next press. */}
+                {warmLeftMs === 0 && kw?.note ? (
+                  <Text key="kw-note" color={PAL.muted} size="caption">{`stopped: ${kw.note} `}</Text>
+                ) : null}
+                <Button
+                  key="usageband-keepwarm"
+                  plain
+                  label={warmLeftMs > 0 ? `keep warm ${shortSpan(warmLeftMs)}${kw && kw.pings > 0 ? ` (${kw.pings})` : ''}` : 'keep warm off'}
+                  onPress={() => void stepKeepWarm($)}
+                />
                 {/* The mascot setting: part of the header row, left of the pager. */}
                 <Button key="usageband-mascot" plain label={v.mascot ? 'mascot on' : 'mascot off'} onPress={() => void flipMascot($)} />
                 {m.pages > 1
