@@ -378,37 +378,55 @@ const valueCy = (y: number): number => y + CHIP_VALUE - (VS * CAP) / 2
 const chipRect = (x: number, y: number, w: number, tint?: string): string =>
   `<rect x="${n2(x)}" y="${n2(y)}" width="${n2(w)}" height="${CHIP_H}" rx="6" fill="${tint ?? CHIP_FILL}" fill-opacity="${tint ? 0.14 : CHIP_ALPHA}"/>`
 
-/** The plain chip: label over value. */
 /** A label's width with 15% to spare, so a label never meets what sits beside it. */
 const MARGIN = 1.15
 const lw = (spans: Span[]): number => spansW(spans) * MARGIN
 
-const plainChip = (head: Span[], value: Span[], tint?: string): Chip => ({
-  min: 2 * CHIP_PX + Math.max(lw(head), spansW(value)),
-  draw: (x, y) => line(x + CHIP_PX, y + CHIP_LABEL, head) + line(x + CHIP_PX, y + CHIP_VALUE, value),
+/** The plain chip: label over value, `pad` px in from each side. */
+const plainChip = (head: Span[], value: Span[], tint?: string, pad = CHIP_PX): Chip => ({
+  min: 2 * pad + Math.max(lw(head), spansW(value)),
+  draw: (x, y) => line(x + pad, y + CHIP_LABEL, head) + line(x + pad, y + CHIP_VALUE, value),
   ...(tint ? { tint } : {}),
 })
 
+/**
+ * How tightly the band's chips are drawn. The band keeps six chips in one row as
+ * long as any of these steps fits, giving up a little at each: first the reset and
+ * TTL figures on the right, then the dot bars, then padding and gaps, then the
+ * words after the values. Only past the last step does it go to two rows, then three.
+ * (Before any of that, the dot bars themselves shrink with the chip, down to 4 dots.)
+ */
+type Fit = { pad: number; gap: number; resets: boolean; dots: boolean; short: boolean }
+const FITS: readonly Fit[] = [
+  { pad: CHIP_PX, gap: CHIP_GAP, resets: true, dots: true, short: false },
+  { pad: CHIP_PX, gap: CHIP_GAP, resets: false, dots: true, short: false },
+  { pad: CHIP_PX, gap: CHIP_GAP, resets: false, dots: false, short: false },
+  { pad: 6, gap: 4, resets: false, dots: false, short: false },
+  { pad: 6, gap: 4, resets: false, dots: false, short: true },
+]
+
 /** 5H or 7D: name and reset on the top line; percent left, a dot bar, and LOW at the right end. */
-const gaugeChip = (name: string, g: Gauge | null, fill: string): Chip => {
+const gaugeChip = (name: string, g: Gauge | null, fill: string, fit: Fit): Chip => {
   const head = [sLabel(name)]
-  if (!g) return plainChip(head, [sSoft('--')])
-  const reset = [sLabel(g.reset)]
+  if (!g) return plainChip(head, [sSoft('--')], undefined, fit.pad)
+  const reset = fit.resets && g.reset ? [sLabel(g.reset)] : []
   const pct = [sVal(`${g.left}%`, fill)]
   const low = g.left < 15 ? pill('LOW', PAL.d7, true) : null
   const lowW = low ? low.w + 6 : 0
+  const top = lw(head) + (reset.length > 0 ? 10 + lw(reset) : 0)
+  const bottom = spansW(pct) + (fit.dots ? 8 + DOTS_MIN_W : 0) + lowW
   return {
-    min: 2 * CHIP_PX + Math.max(lw(head) + 10 + lw(reset), spansW(pct) + 8 + DOTS_MIN_W + lowW),
+    min: 2 * fit.pad + Math.max(top, bottom),
     draw: (x, y, w) => {
-      const x0 = x + CHIP_PX
-      const x1 = x + w - CHIP_PX
+      const x0 = x + fit.pad
+      const x1 = x + w - fit.pad
       const end = x1 - lowW
-      const n = Math.min(MAX_DOTS, dotsIn(x0 + spansW(pct) + 8, end))
+      const n = fit.dots ? Math.min(MAX_DOTS, dotsIn(x0 + spansW(pct) + 8, end)) : 0
       return (
         line(x0, y + CHIP_LABEL, head) +
-        line(x1, y + CHIP_LABEL, reset, 'end') +
+        (reset.length > 0 ? line(x1, y + CHIP_LABEL, reset, 'end') : '') +
         line(x0, y + CHIP_VALUE, pct) +
-        dotsEndingAt(end, valueCy(y), n, litOf(g.left / 100, n), fill) +
+        (n > 0 ? dotsEndingAt(end, valueCy(y), n, litOf(g.left / 100, n), fill) : '') +
         (low ? low.svg(x1 - low.w, y + CHIP_VALUE) : '')
       )
     },
@@ -421,38 +439,39 @@ const gaugeChip = (name: string, g: Gauge | null, fill: string): Chip => {
  * a dot bar of what is left of the hour. With the mascot setting on, tuzzo stands in
  * front of the text.
  */
-const cacheChip = (v: BandView): Chip => {
+const cacheChip = (v: BandView, fit: Fit): Chip => {
   const c = v.cache
   const head = [sLabel('cache')]
-  if (!c) return plainChip(head, [sSoft('none yet')])
+  if (!c) return plainChip(head, [sSoft('none yet')], undefined, fit.pad)
   const hue = tone(c.mode)
-  const hour = c.mode === 'warm' ? [sLabel('60m')] : []
-  const value = [sVal(c.time, hue), sSoft(c.mode === 'warm' ? 'left' : 'idle', PAL.muted, 4)]
+  const hour = fit.resets && c.mode === 'warm' ? [sLabel('60m')] : []
+  const value = fit.short ? [sVal(c.time, hue)] : [sVal(c.time, hue), sSoft(c.mode === 'warm' ? 'left' : 'idle', PAL.muted, 4)]
   // Where the text starts: the chip's own padding, or past the mascot when it shows.
-  const inset = v.mascot ? 8 + MASCOT + 6 : CHIP_PX
-  const headW = lw(head) + (hour.length > 0 ? 10 + lw(hour) : 0)
+  const inset = v.mascot ? 8 + MASCOT + 6 : fit.pad
+  const top = lw(head) + (hour.length > 0 ? 10 + lw(hour) : 0)
+  const bottom = spansW(value) + (fit.dots ? 8 + DOTS_MIN_W : 0)
   return {
-    min: inset + CHIP_PX + Math.max(headW, spansW(value) + 8 + DOTS_MIN_W),
+    min: inset + fit.pad + Math.max(top, bottom),
     draw: (x, y, w) => {
       const x0 = x + inset
-      const x1 = x + w - CHIP_PX
-      const n = Math.min(MAX_DOTS, dotsIn(x0 + spansW(value) + 8, x1))
+      const x1 = x + w - fit.pad
+      const n = fit.dots ? Math.min(MAX_DOTS, dotsIn(x0 + spansW(value) + 8, x1)) : 0
       const hourLeft = c.mode === 'warm' ? Math.max(0, 60 - c.idleMin) / 60 : 0
       return (
         (v.mascot ? tuzzoShapes(x + 8, y + (CHIP_H - MASCOT) / 2, MASCOT, c.mode) : '') +
         line(x0, y + CHIP_LABEL, head) +
         (hour.length > 0 ? line(x1, y + CHIP_LABEL, hour, 'end') : '') +
         line(x0, y + CHIP_VALUE, value) +
-        dotsEndingAt(x1, valueCy(y), n, litOf(hourLeft, n), hue)
+        (n > 0 ? dotsEndingAt(x1, valueCy(y), n, litOf(hourLeft, n), hue) : '')
       )
     },
   }
 }
 
-/** A row of chips, `w` wide, equal widths. */
-const chipRow = (chips: Chip[], x: number, y: number, w: number): string => {
-  const cw = (w - (chips.length - 1) * CHIP_GAP) / chips.length
-  return chips.map((c, i) => chipRect(x + i * (cw + CHIP_GAP), y, cw, c.tint) + c.draw(x + i * (cw + CHIP_GAP), y, cw)).join('')
+/** A row of chips, `w` wide, equal widths, `gap` px apart. */
+const chipRow = (chips: Chip[], x: number, y: number, w: number, gap = CHIP_GAP): string => {
+  const cw = (w - (chips.length - 1) * gap) / chips.length
+  return chips.map((c, i) => chipRect(x + i * (cw + gap), y, cw, c.tint) + c.draw(x + i * (cw + gap), y, cw)).join('')
 }
 
 // ---------- The band: six chips ----------
@@ -467,48 +486,65 @@ const bandAlt = (v: BandView): string => {
 
 /**
  * NEXT: what one more message costs now on the current model, warm at the cache
- * read price, cold re-writing the cache. The model's name rides on the label line,
- * and a cold cache adds "cold" after the price.
+ * read price, cold re-writing the cache. The model's name rides on the label line
+ * (dropped when tight), and a cold cache adds "cold" after the price.
  */
-const nextChip = (v: BandView): Chip => {
+const nextChip = (v: BandView, fit: Fit): Chip => {
   const mine = v.prices.find(p => p.isMine)
-  if (!mine) return plainChip([sLabel('next')], [sSoft('--')])
+  if (!mine) return plainChip([sLabel('next')], [sSoft('--')], undefined, fit.pad)
   const cold = v.cache?.mode === 'cold'
-  const value = [...sMoney(mine.usd), ...(cold ? [sSoft('cold', PAL.cold, 5)] : [])]
-  const forms = [[sLabel('next'), sLabel('·', PAL.muted, 5), sLabel(mine.name, PAL.muted, 5)], [sLabel('next')]]
+  const value = [...sMoney(mine.usd), ...(cold && !fit.short ? [sSoft('cold', PAL.cold, 5)] : [])]
+  const named = [sLabel('next'), sLabel('·', PAL.muted, 5), sLabel(mine.name, PAL.muted, 5)]
+  const forms = fit.short ? [[sLabel('next')]] : [named, [sLabel('next')]]
   const last = forms[forms.length - 1] ?? []
   return {
-    min: 2 * CHIP_PX + Math.max(lw(last), spansW(value)),
+    min: 2 * fit.pad + Math.max(lw(last), spansW(value)),
     draw: (x, y, w) =>
-      line(x + CHIP_PX, y + CHIP_LABEL, forms.find(f => lw(f) <= w - 2 * CHIP_PX) ?? last) + line(x + CHIP_PX, y + CHIP_VALUE, value),
+      line(x + fit.pad, y + CHIP_LABEL, forms.find(f => lw(f) <= w - 2 * fit.pad) ?? last) + line(x + fit.pad, y + CHIP_VALUE, value),
   }
 }
 
-const bandChips = (v: BandView): Chip[] => [
-  gaugeChip('5H', v.h5, PAL.h5),
-  gaugeChip('7D', v.d7, PAL.d7),
-  cacheChip(v),
-  plainChip([sLabel('spent')], sMoney(v.usd)),
-  plainChip([sLabel('tokens')], [sVal(fmtTok(totalOf(v)))]),
-  nextChip(v),
+const bandChips = (v: BandView, fit: Fit): Chip[] => [
+  gaugeChip('5H', v.h5, PAL.h5, fit),
+  gaugeChip('7D', v.d7, PAL.d7, fit),
+  cacheChip(v, fit),
+  plainChip([sLabel('spent')], sMoney(v.usd), undefined, fit.pad),
+  plainChip([sLabel('tokens')], [sVal(fmtTok(totalOf(v)))], undefined, fit.pad),
+  nextChip(v, fit),
 ]
 
-const rowY = (r: number): number => B_PAD + r * (CHIP_H + CHIP_GAP)
-
 /**
- * The band for its width in CSS pixels: six chips in a row, else two rows of
- * three, else three rows of two. Laid out afresh on every call from the width
- * alone, so a pane that narrows and widens again gets the right rows back.
+ * The band for its width in CSS pixels: six chips in a row, drawn as loosely as
+ * the width allows (see FITS), else two rows of three, else three rows of two.
+ * Laid out afresh on every call from the width alone, so a pane that narrows and
+ * widens again gets the right rows back.
  */
 export const bandSvg = (v: BandView, widthPx: number, most = 6): { source: string; w: number; h: number; alt: string; rows: number } => {
   const W = Math.max(120, Math.floor(widthPx))
-  const chips = bandChips(v)
   const area = W - 2 * B_PAD
-  const per = [6, 3, 2].filter(p => p <= most).find(p => chips.every(c => c.min <= (area - (p - 1) * CHIP_GAP) / p)) ?? 2
+  let per = 2
+  let fit = FITS[FITS.length - 1] ?? FITS[0]
+  let chips: Chip[] = []
+  search: for (const p of [6, 3, 2].filter(n => n <= most)) {
+    for (const f of FITS) {
+      const tried = bandChips(v, f)
+      if (tried.every(c => c.min <= (area - (p - 1) * f.gap) / p)) {
+        per = p
+        fit = f
+        chips = tried
+        break search
+      }
+    }
+  }
+  if (chips.length === 0 || fit === undefined) {
+    fit = FITS[FITS.length - 1] as Fit
+    chips = bandChips(v, fit)
+  }
+  const step = fit.gap
   const rows = Math.ceil(chips.length / per)
-  const H = 2 * B_PAD + rows * CHIP_H + (rows - 1) * CHIP_GAP
+  const H = 2 * B_PAD + rows * CHIP_H + (rows - 1) * step
   let body = ''
-  for (let r = 0; r < rows; r++) body += chipRow(chips.slice(r * per, r * per + per), B_PAD, rowY(r), area)
+  for (let r = 0; r < rows; r++) body += chipRow(chips.slice(r * per, r * per + per), B_PAD, B_PAD + r * (CHIP_H + step), area, step)
   return { source: svgDoc(W, H, body), w: W, h: H, alt: bandAlt(v), rows }
 }
 

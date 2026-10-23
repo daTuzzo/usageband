@@ -395,9 +395,22 @@ export const register: Register = on => {
     if (v.cache) parts.push([{ t: `${v.cache.mode} ${v.cache.time}`, color: tone(v.cache.mode), bold: true }])
     parts.push([{ t: formatUsd(v.usd), color: PAL.ink, bold: true }])
     const runs: Run[] = parts.flatMap((p, i) => (i === 0 ? p : [{ t: ' │ ', dim: true }, ...p]))
+    // The desktop footer showed this row's children in reverse (the Button drew left of the
+    // line it followed), so the Button comes first here to land on the right. The line never
+    // shrinks: a shrinkable line was cut to a few words inside the footer's slot.
+    const toggle = (
+      <Box key="toggle" flexShrink={0} marginLeft={1}>
+        <Button
+          key="usageband-footer"
+          label={hidden ? 'expand' : 'collapse'}
+          onPress={() => void setView($, x => (x === 'mini' ? 'band' : 'mini'))}
+        />
+      </Box>
+    )
     return (
-      <Box flexDirection="row" alignItems="center">
-        <Box key="line" flexDirection="row" flexShrink={1} minWidth={0} marginRight={1}>
+      <Box flexDirection="row" alignItems="center" flexShrink={0}>
+        {toggle}
+        <Box key="line" flexDirection="row" flexShrink={0}>
           {runs.map((r, i) =>
             r.dim ? (
               <Text key={`r${i}`} dimColor>
@@ -413,13 +426,6 @@ export const register: Register = on => {
               </Text>
             ),
           )}
-        </Box>
-        <Box key="toggle" flexShrink={0}>
-          <Button
-            key="usageband-footer"
-            label={hidden ? 'expand' : 'collapse'}
-            onPress={() => void setView($, x => (x === 'mini' ? 'band' : 'mini'))}
-          />
         </Box>
       </Box>
     )
