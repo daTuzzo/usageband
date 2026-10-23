@@ -9,10 +9,10 @@ Your Claude Code usage at a glance: what is left of the 5-hour and 7-day limits,
 **Footer line.** Always on, next to the model name, and it takes no space:
 
 ```
-5h 77% │ 7d 96% │ warm 42m │ $3.42  [collapse]
+usageband 5h 77% │ 7d 96% │ $3.42   [collapse] warm 42m
 ```
 
-Left to right: 5-hour and 7-day limits left, the cache (red while warm, blue once cold) with its countdown, and the money spent this session.
+The status part shows the 5-hour and 7-day limits left and the money spent this session. After the button, the cache shows its countdown in red while warm and its idle time in blue once cold.
 
 **Band.** Six chips above the prompt. They reflow into rows as the pane narrows.
 
