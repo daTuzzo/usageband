@@ -274,6 +274,9 @@ const pack = (items: Seg[][], room: number): Seg[][][] => {
 
 export const register: Register = on => {
   on('session.start', async ($, ready, next) => {
+    // Versions before 0.8.0 pinned a plain status line, and the engine keeps it until
+    // a plugin clears it. The figures live in the footer row now, so clear it.
+    $.ui.status(undefined)
     // Bring back the view picked in an earlier session or another window.
     const stored = await $.store.get(STORED_VIEW)
     if (isView(stored)) await update($, view, () => stored)
@@ -368,19 +371,15 @@ export const register: Register = on => {
   })
 
   // The footer, right of the prompt: the engine's mode labels, then the usage line
-  // ("5h 77% left │ 7d 96% left │ cache warm 42m │ spent $3.42"), then one Button in the
-  // app's own style that shows or hides the band at any time: "expand" while it is
-  // hidden, "collapse" while it shows.
-  // It reads the view and the figures here, so a change to either draws it again, and
-  // the redraw interval keeps the countdown current. Narrow footers drop words, never the Button.
+  // ("5h 77% │ 7d 96% │ warm 42m │ $3.42"), then one Button in the app's own style that
+  // shows or hides the band at any time: "expand" while it is hidden, "collapse" while
+  // it shows. The footer slot is narrow and the engine reports only the window's width,
+  // so the line is always the short form. It reads the view and the figures here, so a
+  // change to either draws it again, and the redraw interval keeps the countdown current.
   on('ui.render', { component: 'SessionMode' }, async ($, ev) => {
     const { Box, Button, Text } = $.ui.resolve(ev)
     const hidden = (await read($, view)) === 'mini'
     const v = await bandView($)
-    const cols = ev.viewport?.columns ?? 120
-    const withLeft = cols >= 70
-    const withSpent = cols >= 55
-    const withCacheWord = cols >= 45
     type Run = { t: string; color?: string; bold?: boolean; dim?: boolean }
     const parts: Run[][] = []
     if (ev.props.modes.length > 0) parts.push([{ t: ev.props.modes.join(' & '), dim: true }])
@@ -389,19 +388,12 @@ export const register: Register = on => {
         ? [
             { t: `${name} `, dim: true },
             { t: `${g.left}%`, color, bold: true },
-            ...(withLeft ? [{ t: ' left', dim: true }] : []),
             ...(g.left < LOW_UNDER ? [{ t: ' LOW', color: PAL.d7, bold: true }] : []),
           ]
         : [{ t: `${name} --`, dim: true }]
     parts.push(gauge('5h', v.h5, PAL.h5), gauge('7d', v.d7, PAL.d7))
-    if (v.cache) {
-      const c = v.cache
-      parts.push([
-        ...(withCacheWord ? [{ t: 'cache ', dim: true }] : []),
-        { t: `${c.mode} ${c.time}`, color: tone(c.mode), bold: true },
-      ])
-    }
-    if (withSpent) parts.push([{ t: 'spent ', dim: true }, { t: formatUsd(v.usd), color: PAL.ink, bold: true }])
+    if (v.cache) parts.push([{ t: `${v.cache.mode} ${v.cache.time}`, color: tone(v.cache.mode), bold: true }])
+    parts.push([{ t: formatUsd(v.usd), color: PAL.ink, bold: true }])
     const runs: Run[] = parts.flatMap((p, i) => (i === 0 ? p : [{ t: ' │ ', dim: true }, ...p]))
     return (
       <Box flexDirection="row" alignItems="center">
