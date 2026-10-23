@@ -51,7 +51,7 @@ The status part shows the 5-hour and 7-day limits left and the money spent this 
 
 A cold cache makes the next message re-write the whole context at twice the input price. A warm one only reads it. On Opus, one cold send costs as much as about 40 reads, so keeping the cache warm while you step away is cheap next to coming back to a cold one.
 
-Press **keep warm** in the details header to start a timer (2 h, 4 h or 8 h). Until it runs out, the mod sends one short line ("cache ping, reply ok") 59 minutes after the last request, just before the 1-hour cache expires. The footer shows `kw` while it runs, and the button counts down.
+Press **keep warm** in the details header to start a timer (2 h, 4 h or 8 h). Until it runs out, the mod sends one short line ("cache ping, reply ok") as soon as 2 minutes or less are left on the 1-hour cache (58 minutes after the last request). It checks every 10 seconds, so it has 12 chances to catch that window. The footer shows `kw` while it runs, and the button counts down.
 
 It stops on its own, and shows why, when:
 

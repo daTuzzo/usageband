@@ -6,8 +6,11 @@ import type { CacheState, Family } from './pricing'
 // only reads it (about 1/40 of that on Opus), so pinging once an hour is cheap next to
 // one cold send. These are its decisions, kept free of the engine so they can be tested.
 
-/** A ping goes out this long after the last request: one minute before the 1-hour cache expires. */
-export const PING_AFTER_MS = 59 * 60_000
+/**
+ * A ping goes out once this long has passed since the last request: with 2 minutes or less
+ * left on the 1-hour cache. On a 10-second tick that gives 12 chances before it expires.
+ */
+export const PING_AFTER_MS = 58 * 60_000
 /** Each press of the keep-warm button steps through these timers, in hours, then off. */
 export const KEEP_WARM_HOURS = [2, 4, 8]
 /** Below this cold-send price the cache is not worth keeping. */
@@ -52,7 +55,9 @@ export const keepWarmStep = (
 ): KeepWarmStep => {
   if (kw === null || kw.until <= 0) return { act: 'idle' }
   if (now >= kw.until) return { act: 'stop', note: 'timer done' }
-  if (turnOpen) return { act: 'wait' } // a running turn uses the cache anyway
+  // A running turn uses the cache anyway. A turn that sent nothing for 10 minutes is taken
+  // as ended: an interrupted turn may never report its end, and must not hold pings back.
+  if (turnOpen && (cache === null || cache.idleMs < PING_STALE_MS)) return { act: 'wait' }
   if (kw.pendingAt > 0 && now - kw.pendingAt < PING_STALE_MS) return { act: 'wait' }
   if (cache === null || cache.idleMs < PING_AFTER_MS) return { act: 'wait' }
   if (cache.state === 'cold') return { act: 'stop', note: 'cache went cold' }
