@@ -1,0 +1,11 @@
+{
+  "name": "usageband",
+  "owner": { "name": "daTuzzo", "url": "https://github.com/daTuzzo" },
+  "plugins": [
+    {
+      "name": "usageband",
+      "source": "./",
+      "description": "Usage at a glance: 5-hour and 7-day limits left, prompt cache warm or cold, next message cost, spend and tokens, in a compact band and a footer line."
+    }
+  ]
+}

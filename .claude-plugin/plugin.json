@@ -1,0 +1,11 @@
+{
+  "name": "usageband",
+  "version": "0.11.0",
+  "description": "Usage at a glance: 5-hour and 7-day limits left, prompt cache warm or cold, next message cost, spend and tokens, in a compact band and a footer line.",
+  "author": { "name": "daTuzzo", "url": "https://github.com/daTuzzo" },
+  "homepage": "https://github.com/daTuzzo/usageband",
+  "repository": "https://github.com/daTuzzo/usageband",
+  "license": "MIT",
+  "keywords": ["usage", "rate-limit", "prompt-cache", "cost", "tokens", "status", "mod"],
+  "types": "./types/index.d.ts"
+}

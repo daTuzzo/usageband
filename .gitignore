@@ -1,0 +1,10 @@
+# Local only: earlier design rounds and reference material
+_archive/
+
+# Types the engine writes into a loaded mod's folder
+.claude-plugin/types/
+
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
