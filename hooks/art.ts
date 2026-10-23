@@ -392,17 +392,16 @@ const plainChip = (head: Span[], value: Span[], tint?: string, pad = CHIP_PX): C
 /**
  * How tightly the band's chips are drawn. The band keeps six chips in one row as
  * long as any of these steps fits, giving up a little at each: first the reset and
- * TTL figures on the right, then the dot bars, then padding and gaps, then the
- * words after the values. Only past the last step does it go to two rows, then three.
- * (Before any of that, the dot bars themselves shrink with the chip, down to 4 dots.)
+ * TTL figures on the right, then padding and gaps, then the words after the values.
+ * Only past the last step does it go to two rows, then three. The dot bars always
+ * show: they shrink with the chip, down to 4 dots, but no step removes them.
  */
 type Fit = { pad: number; gap: number; resets: boolean; dots: boolean; short: boolean }
 const FITS: readonly Fit[] = [
   { pad: CHIP_PX, gap: CHIP_GAP, resets: true, dots: true, short: false },
   { pad: CHIP_PX, gap: CHIP_GAP, resets: false, dots: true, short: false },
-  { pad: CHIP_PX, gap: CHIP_GAP, resets: false, dots: false, short: false },
-  { pad: 6, gap: 4, resets: false, dots: false, short: false },
-  { pad: 6, gap: 4, resets: false, dots: false, short: true },
+  { pad: 6, gap: 4, resets: false, dots: true, short: false },
+  { pad: 6, gap: 4, resets: false, dots: true, short: true },
 ]
 
 /** 5H or 7D: name and reset on the top line; percent left, a dot bar, and LOW at the right end. */

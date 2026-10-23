@@ -1,6 +1,6 @@
 {
   "name": "usageband",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "description": "Usage at a glance: 5-hour and 7-day limits left, prompt cache warm or cold, next message cost, spend and tokens, in a compact band and a footer line.",
   "author": { "name": "daTuzzo", "url": "https://github.com/daTuzzo" },
   "homepage": "https://github.com/daTuzzo/usageband",
