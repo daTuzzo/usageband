@@ -91,11 +91,21 @@ const at = (ms: number): string => `${Math.floor(ms / HOUR)}h${String(Math.floor
 {
   const kw = on(8)
   const warm = { state: 'warm' as const, idleMs: PING_AFTER_MS + 5000, tokens: 688_000, family: 'opus' as const }
-  assert.equal(keepWarmStep(kw, warm, OK_LIMITS, PING_AFTER_MS + 5000, true).act, 'wait')
+  assert.equal(keepWarmStep(kw, { ...warm, idleMs: 2 * MIN }, OK_LIMITS, 2 * MIN, true).act, 'wait')
   const cold = { ...warm, state: 'cold' as const, idleMs: CACHE_TTL_MS + 1 }
   assert.deepEqual(keepWarmStep(kw, cold, OK_LIMITS, CACHE_TTL_MS + 1, false), { act: 'stop', note: 'cache went cold' })
   assert.equal(keepWarmStep(null, warm, OK_LIMITS, 0, false).act, 'idle')
   console.log('a running turn waits; a cold cache stops it; off stays idle')
+}
+
+// A turn flag left on (an interrupted turn that never reported its end) must not hold pings back.
+{
+  const kw = on(8)
+  const due = { state: 'warm' as const, idleMs: PING_AFTER_MS + 5000, tokens: 688_000, family: 'opus' as const }
+  assert.equal(keepWarmStep(kw, due, OK_LIMITS, PING_AFTER_MS + 5000, true).act, 'ping')
+  const recent = { ...due, idleMs: 3 * MIN }
+  assert.equal(keepWarmStep(kw, recent, OK_LIMITS, 3 * MIN, true).act, 'wait')
+  console.log('a stuck turn flag does not block a due ping; a live turn still waits')
 }
 
 // After a ping: a cache write bigger than the read means the cache had gone.
