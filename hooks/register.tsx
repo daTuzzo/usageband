@@ -370,63 +370,43 @@ export const register: Register = on => {
       : { text: 'Usage band shown.' }
   })
 
-  // The footer, right of the prompt: the engine's mode labels, then the usage line
-  // ("5h 77% │ 7d 96% │ warm 42m │ $3.42"), then one Button in the app's own style that
-  // shows or hides the band at any time: "expand" while it is hidden, "collapse" while
-  // it shows. The footer slot is narrow and the engine reports only the window's width,
-  // so the line is always the short form. It reads the view and the figures here, so a
-  // change to either draws it again, and the redraw interval keeps the countdown current.
+  // The footer row. The desktop app cuts this slot after about 25 characters, so it
+  // holds only the expand/collapse Button and the cache in colour ("warm 42m" red,
+  // "cold 1h12" blue). The rest of the line ("5h 77% │ 7d 96% │ $3.42") goes to the
+  // plugin status line, which has room for it. Both refresh here, so a change to the
+  // view or the figures, and the redraw interval, keep them current.
+  let lastStatus: string | undefined
   on('ui.render', { component: 'SessionMode' }, async ($, ev) => {
     const { Box, Button, Text } = $.ui.resolve(ev)
     const hidden = (await read($, view)) === 'mini'
     const v = await bandView($)
-    type Run = { t: string; color?: string; bold?: boolean; dim?: boolean }
-    const parts: Run[][] = []
-    if (ev.props.modes.length > 0) parts.push([{ t: ev.props.modes.join(' & '), dim: true }])
-    const gauge = (name: string, g: Gauge | null, color: string): Run[] =>
-      g
-        ? [
-            { t: `${name} `, dim: true },
-            { t: `${g.left}%`, color, bold: true },
-            ...(g.left < LOW_UNDER ? [{ t: ' LOW', color: PAL.d7, bold: true }] : []),
-          ]
-        : [{ t: `${name} --`, dim: true }]
-    parts.push(gauge('5h', v.h5, PAL.h5), gauge('7d', v.d7, PAL.d7))
-    if (v.cache) parts.push([{ t: `${v.cache.mode} ${v.cache.time}`, color: tone(v.cache.mode), bold: true }])
-    parts.push([{ t: formatUsd(v.usd), color: PAL.ink, bold: true }])
-    const runs: Run[] = parts.flatMap((p, i) => (i === 0 ? p : [{ t: ' │ ', dim: true }, ...p]))
-    // The desktop footer showed this row's children in reverse (the Button drew left of the
-    // line it followed), so the Button comes first here to land on the right. The line never
-    // shrinks: a shrinkable line was cut to a few words inside the footer's slot.
-    const toggle = (
-      <Box key="toggle" flexShrink={0} marginLeft={1}>
-        <Button
-          key="usageband-footer"
-          label={hidden ? 'expand' : 'collapse'}
-          onPress={() => void setView($, x => (x === 'mini' ? 'band' : 'mini'))}
-        />
-      </Box>
-    )
+    const gauge = (name: string, g: Gauge | null): string =>
+      g ? `${name} ${g.left}%${g.left < LOW_UNDER ? ' LOW' : ''}` : `${name} --`
+    const status = [gauge('5h', v.h5), gauge('7d', v.d7), formatUsd(v.usd)].join(' │ ')
+    if (status !== lastStatus) {
+      lastStatus = status
+      $.ui.status(status)
+    }
+    const modes = ev.props.modes.join(' & ')
     return (
       <Box flexDirection="row" alignItems="center" flexShrink={0}>
-        {toggle}
-        <Box key="line" flexDirection="row" flexShrink={0}>
-          {runs.map((r, i) =>
-            r.dim ? (
-              <Text key={`r${i}`} dimColor>
-                {r.t}
-              </Text>
-            ) : r.bold ? (
-              <Text key={`r${i}`} color={r.color ?? PAL.ink} weight="bold">
-                {r.t}
-              </Text>
-            ) : (
-              <Text key={`r${i}`} color={r.color ?? PAL.ink}>
-                {r.t}
-              </Text>
-            ),
-          )}
+        <Box key="toggle" flexShrink={0} marginRight={1}>
+          <Button
+            key="usageband-footer"
+            label={hidden ? 'expand' : 'collapse'}
+            onPress={() => void setView($, x => (x === 'mini' ? 'band' : 'mini'))}
+          />
         </Box>
+        {v.cache ? (
+          <Text key="cache" color={tone(v.cache.mode)} weight="bold">
+            {`${v.cache.mode} ${v.cache.time}`}
+          </Text>
+        ) : null}
+        {modes ? (
+          <Text key="modes" dimColor>
+            {` ${modes}`}
+          </Text>
+        ) : null}
       </Box>
     )
   })
