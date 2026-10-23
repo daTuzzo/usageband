@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CacheClock, KeepWarm, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandView } from '../types'
+import type { CacheClock, KeepWarm, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandRelease, UsagebandView } from '../types'
 import {
   CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, PAL,
   bandSvg, fmtTok, menuPages, menuSvg, shortSpan, svgPx, tone,
@@ -9,6 +9,7 @@ import {
 import type { BandView, Gauge } from './art'
 import { PING_TEXT, keepWarmStep, nextKeepWarm, pingFoundCold } from './keepwarm'
 import { CACHE_TTL_MS, FAMILIES, PRICES, familyFor, formatUsd, nextMessageCost, requestCost } from './pricing'
+import { CHECK_EVERY_MS, LATEST_URL, MANUAL_UPDATE, UPDATE_STEPS, isNewer, versionOf } from './update'
 import type { CacheState, Family } from './pricing'
 
 // usageband: how much of the 5-hour and 7-day limits is left, whether the prompt
@@ -40,6 +41,50 @@ const mascot = atom({ plugin: 'usageband', key: 'mascot' } as const, false)
 /** The $.store key for the mascot setting; off unless chosen. */
 const STORED_MASCOT = 'showMascot'
 const keepWarm = atom({ plugin: 'usageband', key: 'keepWarm' } as const, null as KeepWarm | null)
+const release = atom({ plugin: 'usageband', key: 'release' } as const, null as UsagebandRelease | null)
+
+/** The newer version waiting on GitHub, or null when this install is current or the check has not answered. */
+const pendingUpdate = (r: UsagebandRelease | null): string | null =>
+  r !== null && r.latest !== null && r.installed !== '' && isNewer(r.latest, r.installed) ? r.latest : null
+
+/** Reads the installed version and the newest one on GitHub. A failed check changes nothing. */
+const checkForUpdate = async ($: EngineInterface): Promise<void> => {
+  let installed: string | null = null
+  try {
+    installed = versionOf(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))
+  } catch {
+    installed = null
+  }
+  let latest: string | null = null
+  try {
+    const res = await $.http.fetch(LATEST_URL)
+    latest = res.ok ? versionOf(res.text) : null
+  } catch {
+    latest = null // offline, or network use turned off: try again later
+  }
+  await update($, release, r => ({ installed: installed ?? r?.installed ?? '', latest: latest ?? r?.latest ?? null, note: r?.note ?? null }))
+}
+
+/** Runs Claude Code's own update commands. The new version loads in the next session. */
+const runUpdate = async ($: EngineInterface): Promise<void> => {
+  const target = pendingUpdate(await read($, release))
+  if (target === null) return
+  const setNote = (note: string) => update($, release, r => (r === null ? r : { ...r, note }))
+  await setNote(`updating to ${target}`)
+  for (const argv of UPDATE_STEPS) {
+    let ok = false
+    try {
+      ok = (await $.process.run(argv, { timeoutMs: 180_000 })).exitCode === 0
+    } catch {
+      ok = false // the claude command could not start from here (an npm .cmd install, say)
+    }
+    if (!ok) {
+      await setNote(`update failed: run ${MANUAL_UPDATE}`)
+      return
+    }
+  }
+  await update($, release, r => (r === null ? r : { ...r, installed: target, note: `updated to ${target}: new sessions load it` }))
+}
 
 /** Whether a main-thread turn is running; set by turn.step, cleared by turn.complete. */
 let mainTurnOpen = false
@@ -318,6 +363,11 @@ export const register: Register = on => {
       // The same tick checks the keep-warm timer; a slip there never stops the redraw.
       keepWarmTick($).catch(() => undefined)
     })
+    // Look for a newer version now and every 6 hours, without holding the session up.
+    checkForUpdate($).catch(() => undefined)
+    $.clock.every(CHECK_EVERY_MS, () => {
+      checkForUpdate($).catch(() => undefined)
+    })
     return next(ready)
   })
 
@@ -431,7 +481,8 @@ export const register: Register = on => {
     const v = await bandView($)
     const gauge = (name: string, g: Gauge | null): string =>
       g ? `${name} ${g.left}%${g.left < LOW_UNDER ? ' LOW' : ''}` : `${name} --`
-    const status = [gauge('5h', v.h5), gauge('7d', v.d7), formatUsd(v.usd)].join(' │ ')
+    const newer = pendingUpdate(await read($, release))
+    const status = [gauge('5h', v.h5), gauge('7d', v.d7), formatUsd(v.usd), ...(newer ? [`update ${newer}`] : [])].join(' │ ')
     if (status !== lastStatus) {
       lastStatus = status
       $.ui.status(status)
@@ -480,6 +531,8 @@ export const register: Register = on => {
     const kw = await read($, keepWarm)
     const nowMs = await $.clock.now()
     const warmLeftMs = kw !== null && kw.until > nowMs ? kw.until - nowMs : 0
+    const rel = await read($, release)
+    const newer = pendingUpdate(rel)
 
     // The menu opens upward, so the toggle points up while closed and down while open.
     // The toggle is the app's own primary Button; minimise is plain and quieter.
@@ -520,6 +573,13 @@ export const register: Register = on => {
                   DETAILS
                 </Text>
                 <Box key="space" flexGrow={1} />
+                {/* Updates: a button while a newer version waits on GitHub; the outcome stays beside it. */}
+                {rel?.note ? (
+                  <Text key="update-note" color={PAL.muted} size="caption">{`${rel.note} `}</Text>
+                ) : null}
+                {newer !== null && !rel?.note?.startsWith('updated') ? (
+                  <Button key="usageband-update" label={`update to ${newer}`} onPress={() => void runUpdate($)} />
+                ) : null}
                 {/* Keep-warm: each press steps the timer (2 h, 4 h, 8 h, off); the label counts down.
                     After a guard stops it, the reason shows beside it until the next press. */}
                 {warmLeftMs === 0 && kw?.note ? (
