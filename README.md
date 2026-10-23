@@ -9,10 +9,10 @@ Your Claude Code usage at a glance: what is left of the 5-hour and 7-day limits,
 **Footer line.** Always on, next to the model name, and it takes no space:
 
 ```
-5h 77% left │ 7d 96% left │ cache warm 42m │ spent $3.42  [collapse]
+5h 77% │ 7d 96% │ warm 42m │ $3.42  [collapse]
 ```
 
-In narrow panes it drops words ("left", then "spent") so it never wraps.
+Left to right: 5-hour and 7-day limits left, the cache (red while warm, blue once cold) with its countdown, and the money spent this session.
 
 **Band.** Six chips above the prompt. They reflow into rows as the pane narrows.
 
