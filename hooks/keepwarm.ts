@@ -19,7 +19,7 @@ export const MIN_5H_LEFT = 10
 export const MIN_7D_LEFT = 5
 /** A ping whose turn has not finished after this long no longer holds the next one back. */
 export const PING_STALE_MS = 10 * 60_000
-export const PING_TEXT = 'usageband keep-warm ping: reply with only the word ok, and do nothing else.'
+export const PING_TEXT = 'cache ping, reply ok'
 
 const HOUR_MS = 3_600_000
 

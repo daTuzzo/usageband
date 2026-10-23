@@ -64,7 +64,8 @@ const keepWarmTick = async ($: EngineInterface): Promise<void> => {
   if (step.act === 'stop') return stopKeepWarm($, step.note)
   if (step.act !== 'ping') return
   await update($, keepWarm, k => (k === null ? null : { ...k, pendingAt: now }))
-  await $.prompt.submit({ text: PING_TEXT })
+  // Sent bare (asUser): no engine frame around it. Its origin stays the plugin, so it is never counted as a prompt.
+  await $.prompt.submit({ text: PING_TEXT, asUser: true })
 }
 
 const isView = (x: unknown): x is UsagebandView => x === 'mini' || x === 'band' || x === 'open'
