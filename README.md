@@ -74,6 +74,12 @@ In Claude Code:
 
 Then start a new session.
 
+## Updates
+
+Claude Code does not update plugins from a GitHub marketplace on its own unless you turn it on. Do that once: run `/plugin`, open **Marketplaces**, pick **usageband**, and choose **Enable auto-update**.
+
+Without it, usageband tells you itself. Every session checks GitHub for a newer version, at the start and every 6 hours. When one exists, the footer line ends with `update 0.17.0` and the details header shows an **update to 0.17.0** button. The button runs Claude Code's own update commands, and new sessions load the new version. If it cannot run them, it shows the command to run yourself: `claude plugin update usageband@usageband`.
+
 ## Notes
 
 - Prices are Anthropic API list prices per million tokens. A subscription bills differently, so read the dollar figures as what the same work would cost on the API.

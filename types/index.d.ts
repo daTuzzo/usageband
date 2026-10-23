@@ -25,6 +25,9 @@ export type UsagebandView = 'mini' | 'band' | 'open'
  */
 export type KeepWarm = { hours: number; until: number; pings: number; spent: number; pendingAt: number; note: string | null }
 
+/** The installed version, the newest one on GitHub (null until known), and the last update's outcome. */
+export type UsagebandRelease = { installed: string; latest: string | null; note: string | null }
+
 declare module "claude-code" {
   export interface PluginState {
     usageband: {
@@ -39,6 +42,8 @@ declare module "claude-code" {
       mascot: boolean
       /** The keep-warm timer, or null while it has never been switched on. */
       keepWarm: KeepWarm | null
+      /** What the update check found, or null before its first run. */
+      release: UsagebandRelease | null
     }
   }
 }
