@@ -32,7 +32,7 @@ The status part shows how much of the 5-hour and 7-day limits is used (as Claude
 - Next-message price on each model: Fable, Opus, Sonnet, Haiku
 - Tokens: sent, new (not from the cache), cache read, cache write, out
 - Prompt count, reset times, tokens in the cache
-- Subagents in their own card, by name and cost, with their own pager: paging moves only them, never the fixed figures
+- Subagents in their own card, by name and cost, with their own pager: paging moves only them, never the fixed figures. A name too long for its chip is cut; hover it for the whole. Runs with no task name (the engine's own work, such as compaction) show together as one "unnamed" chip
 - Keep warm: a timer that keeps the prompt cache warm while you are away (see below)
 - An optional pixel mascot for the cache chip, off by default
 
@@ -43,15 +43,16 @@ The status part shows how much of the 5-hour and 7-day limits is used (as Claude
 | expand / collapse | Footer | Shows or hides the band |
 | ▴ / ▾ | Band | Opens or closes the details menu |
 | ━ | Band | Hides the band |
-| keep warm | Details header | Picks the keep-warm timer: off, 4h, 8h, 12h, 24h, or custom (1 to 72 hours) |
-| 🧔 | Details header | Shows or hides the mascot; highlighted while it shows |
+| Keep warm | Details header | Starts or stops the keep-warm timer; highlighted while it runs |
+| length picker | Details header | Sets the timer's length: 4h, 8h, 12h, 24h, or custom (1 to 72 hours); starts nothing |
+| mascot | Details header | Shows or hides the mascot; tinted while it shows |
 | `/band` | Prompt | Shows or hides the band |
 
 ## Keep warm
 
 A cold cache makes the next message re-write the whole context at twice the input price. A warm one only reads it. On Opus, one cold send costs as much as about 40 reads, so keeping the cache warm while you step away is cheap next to coming back to a cold one.
 
-Pick a length in the **keep warm** picker in the details header: 4h, 8h, 12h or 24h, or **custom** to type any number of hours from 1 to 72 and press Enter. Until the timer runs out, the mod sends one short line ("cache ping, reply ok") as soon as 2 minutes or less are left on the 1-hour cache (58 minutes after the last request). It checks every 10 seconds, so it has 12 chances to catch that window. The footer shows `kw` while it runs, and the time left shows beside the picker. Pick **off** to stop it. The phone app has no picker: there the button steps through the lengths.
+Set a length in the picker in the details header: 4h, 8h, 12h or 24h, or **custom** to type any number of hours from 1 to 72 and press Enter. The length is remembered for later sessions. Press **Keep warm** to start the timer, and press it again to stop it. Until the timer runs out, the mod sends one short line ("cache ping, reply ok") as soon as 2 minutes or less are left on the 1-hour cache (58 minutes after the last request). It checks every 10 seconds, so it has 12 chances to catch that window. While it runs, the footer shows `kw` and a pill beside the picker shows the time left and the pings sent. A new length picked while it runs takes effect from that moment. The phone app has no picker: there the button runs the length last picked.
 
 It stops on its own, and shows why, when:
 
