@@ -27,7 +27,7 @@ The status part shows how much of the 5-hour and 7-day limits is used (as Claude
 
 ![The band in a narrow pane, warm and cold](docs/narrow.png)
 
-**Details menu.** Opens upward from the band, so the band and the prompt stay where they are.
+**Details menu.** Opens upward from the band, so the band and the prompt stay where they are. The desktop app gives the band a fixed slot (about 11 lines) and scrolls anything taller, so the menu sizes itself to that slot. When it cannot show whole, the header shows tabs: **Figures** and **Subagents**, or in a narrow pane **Usage** (tokens, prompts, reset times), **Cache** (the cache and the next message's prices) and **Subagents**. Each tab shows whole, with no scrolling.
 
 - Next-message price on each model: Fable, Opus, Sonnet, Haiku
 - Tokens: sent, new (not from the cache), cache read, cache write, out

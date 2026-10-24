@@ -20,6 +20,12 @@ export type UsagebandAgents = Record<string, number>
  */
 export type UsagebandAgentInfo = Record<string, { description?: string; prompt?: string; type?: string; model?: string }>
 
+/**
+ * Which part of the menu shows when the whole menu does not fit the band's slot: the fixed
+ * figures, or when those do not fit either, one half of them (tokens, cache); or the subagents.
+ */
+export type UsagebandMenuTab = 'figures' | 'tokens' | 'cache' | 'agents'
+
 /** What the mod shows: nothing above the prompt (mini), the band, or the band with its menu. Remembered in $.store. */
 export type UsagebandView = 'mini' | 'band' | 'open'
 
@@ -44,6 +50,8 @@ declare module "claude-code" {
       agentInfo: UsagebandAgentInfo
       /** Whether the subagents with no name show as one chip (true) or one chip each. */
       groupUnnamed: boolean
+      /** The menu's part on show while the whole menu does not fit the band's slot. */
+      menuTab: UsagebandMenuTab
       view: UsagebandView
       /** The menu's page of subagents, counting from 0. */
       page: number

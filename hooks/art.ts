@@ -569,7 +569,7 @@ export const bandSvg = (v: BandView, widthPx: number, most = 6): { source: strin
 // ---------- The menu: the same chips, drawn above the band ----------
 // Two drawings for two native cards: the fixed figures (tokens, resets, the cache, and
 // the next message's price on each model), and the subagents, one page at a time.
-const M_PAD = 5
+const M_PAD = 2
 /** The least content width a menu chip reads in. */
 const MENU_MIN = 66
 
@@ -647,12 +647,20 @@ const toRows = (chips: Chip[], cols: number): Chip[][] => {
   return rows
 }
 
+/**
+ * Which of the menu's fixed figures to draw: all of them, or one half when the band's slot
+ * is too short for all (tokens, prompts and resets; or the cache and the next message's prices).
+ */
+export type FiguresPart = 'all' | 'tokens' | 'cache'
+
 /** The menu's fixed figures: tokens, resets, the cache, and the next message's price on each model. */
-const statsPlan = (v: BandView, W: number): { cols: number; rows: Chip[][] } => {
+const statsPlan = (v: BandView, W: number, part: FiguresPart): { cols: number; rows: Chip[][] } => {
   const inner = W - 2 * M_PAD
   const cols = Math.max(2, Math.floor((inner + CHIP_GAP) / (MENU_MIN + 2 * CHIP_PX + CHIP_GAP)))
   const room = (inner - (cols - 1) * CHIP_GAP) / cols - 2 * CHIP_PX
-  const fixed = [...group(tokenForms(v), room), ...resetChips(v), inCacheChip(v, room), lastReplyChip(v), ...group(nextForms(v), room)]
+  const tokens = [...group(tokenForms(v), room), ...resetChips(v)]
+  const cache = [inCacheChip(v, room), lastReplyChip(v), ...group(nextForms(v), room)]
+  const fixed = part === 'tokens' ? tokens : part === 'cache' ? cache : [...tokens, ...cache]
   return { cols, rows: toRows(fixed, cols) }
 }
 
@@ -685,14 +693,16 @@ const agentsPlan = (v: BandView, W: number, page: number): { cols: number; row: 
 /** How many pages of subagents the menu shows at this width. */
 export const menuPages = (v: BandView, widthPx: number): number => agentsPlan(v, Math.max(120, Math.floor(widthPx)), 0).pages
 
-/** The open menu's fixed figures at the band's width. They never page: only the subagents do. */
-export const menuSvg = (v: BandView, widthPx: number): { source: string; w: number; h: number; alt: string } => {
+/** The open menu's fixed figures at the band's width, all or one half. They never page: only the subagents do. */
+export const menuSvg = (v: BandView, widthPx: number, part: FiguresPart = 'all'): { source: string; w: number; h: number; alt: string } => {
   const W = Math.max(120, Math.floor(widthPx))
-  const plan = statsPlan(v, W)
+  const plan = statsPlan(v, W, part)
   const H = rowsH(plan.rows.length)
+  // Every chip one width: a short last row does not stretch its chips across the card.
+  const cw = (W - 2 * M_PAD - (plan.cols - 1) * CHIP_GAP) / plan.cols
   let body = ''
   plan.rows.forEach((row, r) => {
-    body += chipRow(row, M_PAD, M_PAD + r * (CHIP_H + CHIP_GAP), W - 2 * M_PAD)
+    body += chipRow(row, M_PAD, M_PAD + r * (CHIP_H + CHIP_GAP), row.length * cw + (row.length - 1) * CHIP_GAP)
   })
   const alt = [
     `Tokens ${fmtTok(v.input)} new, ${fmtTok(v.output)} out, cache read ${fmtTok(v.cacheRead)}, write ${fmtTok(v.cacheWrite)}.`,
@@ -719,9 +729,35 @@ export const agentsSvg = (
   return { source: svgDoc(W, H, body), w: W, h: H, alt, page: plan.page, pages: plan.pages }
 }
 
+// ---------- The band's slot on desktop ----------
+/**
+ * The desktop app caps the band's area at `calc(11lh + 40px)` (its maxRows is 12) and
+ * scrolls a taller tree; read from the app's own code, 2026-10-24. In the band a line is
+ * the app's small body leading, 17 to 20 px: the smaller is assumed, so what fits here fits there.
+ */
+const LINE_PX = 17
+const SLOT_EXTRA_PX = 40
+/** The band's slot height in CSS pixels for the rows the engine gives it. */
+export const slotPx = (maxRows: number): number => (Math.max(2, maxRows) - 1) * LINE_PX + SLOT_EXTRA_PX
+
+/**
+ * The open view's native parts, in CSS pixels (the app's small sizes): the gap above the
+ * band, the menu card's border, its header row (20 px controls and a small padding), a
+ * second header line when the controls wrap, and the subagents card's border, header and gap.
+ */
+export const OPEN_PX = { air: 2, card: 2, head: 30, headWrap: 24, agentsCard: 28 } as const
+
+/**
+ * Whether the whole open view (band, menu header, fixed figures, subagents card) fits the
+ * slot. When it does not, the menu shows its figures and its subagents one at a time.
+ */
+export const openFits = (p: { slot: number; band: number; headLines: number; stats: number; agents: number }): boolean =>
+  p.band + OPEN_PX.air + OPEN_PX.card + OPEN_PX.head + (p.headLines - 1) * OPEN_PX.headWrap + p.stats + (p.agents > 0 ? OPEN_PX.agentsCard + p.agents : 0) <=
+  p.slot
+
 // ---------- The details header's two drawings ----------
-/** The mascot button's side, in CSS pixels, as tall as the app's controls: the portrait's 10 cells at 2 px, 4 px around. */
-export const MASCOT_ICON = 28
+/** The mascot button's side, in CSS pixels, near the band's 20 px controls: the portrait's 10 cells at 2 px, 1 px around. */
+export const MASCOT_ICON = 22
 
 /**
  * The mascot setting's face: the pixel portrait on a square, tinted in the cache's warm
@@ -730,15 +766,15 @@ export const MASCOT_ICON = 28
 export const mascotIconSvg = (on: boolean): { source: string; w: number; h: number; alt: string } => {
   const S = MASCOT_ICON
   const square = on
-    ? `<rect x="0.5" y="0.5" width="${S - 1}" height="${S - 1}" rx="6" fill="${PAL.warm}" fill-opacity="0.22" stroke="${PAL.warm}" stroke-opacity="0.85"/>`
-    : `<rect x="0.5" y="0.5" width="${S - 1}" height="${S - 1}" rx="6" fill="${CHIP_FILL}" fill-opacity="0.04" stroke="${PAL.track}"/>`
-  const face = `<g transform="translate(4 4)" shape-rendering="crispEdges">${portrait(2, on ? hex => hex : hex => blend(hex, PAL.muted, 0.45))}</g>`
+    ? `<rect x="0.5" y="0.5" width="${S - 1}" height="${S - 1}" rx="5" fill="${PAL.warm}" fill-opacity="0.22" stroke="${PAL.warm}" stroke-opacity="0.85"/>`
+    : `<rect x="0.5" y="0.5" width="${S - 1}" height="${S - 1}" rx="5" fill="${CHIP_FILL}" fill-opacity="0.04" stroke="${PAL.track}"/>`
+  const face = `<g transform="translate(1 1)" shape-rendering="crispEdges">${portrait(2, on ? hex => hex : hex => blend(hex, PAL.muted, 0.45))}</g>`
   return { source: svgDoc(S, S, square + face), w: S, h: S, alt: on ? 'Mascot on' : 'Mascot off' }
 }
 
-/** The keep-warm timer's pill: its height in CSS pixels and its text size. */
-const TIMER_H = 24
-const TS = 13
+/** The keep-warm timer's pill: its height in CSS pixels (the band's controls are 20 px) and its text size. */
+const TIMER_H = 20
+const TS = 12
 
 /**
  * The keep-warm timer as a pill in the band's style. Running: a ring of the time left
@@ -750,7 +786,7 @@ export const timerPillSvg = (
 ): { source: string; w: number; h: number; alt: string } => {
   const cy = TIMER_H / 2
   const base = cy + (TS * CAP) / 2
-  const x0 = 26
+  const x0 = 22
   const spans: Span[] =
     'note' in t
       ? [
@@ -768,16 +804,16 @@ export const timerPillSvg = (
             : []),
         ]
   const W = Math.ceil(x0 + spansW(spans) + 10)
-  const R = 6
+  const R = 5
   const ring = (frac: number): string => {
     const len = 2 * Math.PI * R
     return (
-      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.track}" stroke-width="3"/>` +
-      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.warm}" stroke-width="3.2" stroke-linecap="round"` +
-      ` stroke-dasharray="${n2(Math.max(0.01, frac) * len)} ${n2(len)}" transform="rotate(-90 13 ${cy})"/>`
+      `<circle cx="11" cy="${cy}" r="${R}" fill="none" stroke="${PAL.track}" stroke-width="2.6"/>` +
+      `<circle cx="11" cy="${cy}" r="${R}" fill="none" stroke="${PAL.warm}" stroke-width="2.8" stroke-linecap="round"` +
+      ` stroke-dasharray="${n2(Math.max(0.01, frac) * len)} ${n2(len)}" transform="rotate(-90 11 ${cy})"/>`
     )
   }
-  const mark = 'note' in t ? `<circle cx="13" cy="${cy}" r="4" fill="${PAL.cold}"/>` : ring(t.totalMs > 0 ? Math.min(1, t.leftMs / t.totalMs) : 0)
+  const mark = 'note' in t ? `<circle cx="11" cy="${cy}" r="3.5" fill="${PAL.cold}"/>` : ring(t.totalMs > 0 ? Math.min(1, t.leftMs / t.totalMs) : 0)
   const body =
     `<rect x="0.5" y="0.5" width="${W - 1}" height="${TIMER_H - 1}" rx="${(TIMER_H - 1) / 2}" fill="${CHIP_FILL}" fill-opacity="0.06" stroke="${CHIP_FILL}" stroke-opacity="0.08"/>` +
     mark +

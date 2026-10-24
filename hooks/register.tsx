@@ -1,10 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CacheClock, KeepWarm, UsagebandAgentInfo, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandRelease, UsagebandView } from '../types'
+import type {
+  CacheClock, KeepWarm, UsagebandAgentInfo, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandMenuTab, UsagebandRelease, UsagebandView,
+} from '../types'
 import {
-  CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, MASCOT_ICON, PAL,
-  agentsSvg, bandSvg, fmtTok, mascotIconSvg, menuPages, menuSvg, shortSpan, svgPx, timerPillSvg, tone,
+  CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, MASCOT_ICON, OPEN_PX, PAL,
+  agentsSvg, bandSvg, fmtTok, mascotIconSvg, menuPages, menuSvg, openFits, shortSpan, slotPx, svgPx, timerPillSvg, tone,
 } from './art'
 import type { AgentCost, BandView, Gauge } from './art'
 import {
@@ -32,7 +34,14 @@ const CARD_BORDER = '#2a2925'
 const AGENTS_FILL = '#211f1a'
 const AGENTS_BORDER = '#3a372e'
 /** Six pixels of air between the menu's card and the band. */
-const AIR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="6" viewBox="0 0 1 6"></svg>'
+const AIR_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="${OPEN_PX.air}" viewBox="0 0 1 ${OPEN_PX.air}"></svg>`
+/**
+ * The header's controls, in CSS pixels, to tell whether they fit one line: the label or the
+ * two tabs, Keep warm, the length picker, the mascot, and the gaps and padding around them.
+ */
+const HEAD_W = { label: 60, tabs2: 190, tabs3: 250, pill: 120, keepWarm: 80, picker: 56, mascot: 22, gaps: 60 } as const
+/** The tabs' labels: "Usage" holds the tokens, the prompts and the reset times. */
+const TAB_LABELS: Record<UsagebandMenuTab, string> = { figures: 'Figures', tokens: 'Usage', cache: 'Cache', agents: 'Subagents' }
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 /** The $.store key under which the chosen view outlives the session. */
 const STORED_VIEW = 'view'
@@ -43,6 +52,7 @@ const counters = atom({ plugin: 'usageband', key: 'counters' } as const, NO_COUN
 const agentSpend = atom({ plugin: 'usageband', key: 'agentSpend' } as const, {} as UsagebandAgents)
 const agentInfo = atom({ plugin: 'usageband', key: 'agentInfo' } as const, {} as UsagebandAgentInfo)
 const groupUnnamed = atom({ plugin: 'usageband', key: 'groupUnnamed' } as const, false)
+const menuTab = atom({ plugin: 'usageband', key: 'menuTab' } as const, 'figures' as UsagebandMenuTab)
 
 /** Adds what was just learned of one subagent to what is known of it. */
 const learnAgent = ($: EngineInterface, agentId: string, info: UsagebandAgentInfo[string]): Promise<unknown> =>
@@ -785,15 +795,61 @@ export const register: Register = on => {
         const pages = menuPages(await bandView($), agentsW)
         await update($, page, x => Math.max(0, Math.min(pages - 1, Math.min(pages - 1, x) + step)))
       }
+      // The whole open view must fit the band's slot, or the app scrolls it and cuts its top
+      // off. When it does not fit, tabs show one part at a time: the figures or the subagents;
+      // in a pane too narrow for even that, the figures split in two (tokens, cache). The
+      // header's width counts the timer pill whether it shows or not, so starting the timer
+      // never switches the layout.
+      const slot = slotPx(ev.props.maxRows)
+      const fits = (labelW: number, stats: number, agents: number): boolean =>
+        openFits({
+          slot,
+          band: b.h,
+          headLines: menuW >= labelW + HEAD_W.pill + HEAD_W.keepWarm + HEAD_W.picker + HEAD_W.mascot + HEAD_W.gaps ? 1 : 2,
+          stats,
+          agents,
+        })
+      const tabs: UsagebandMenuTab[] =
+        m === null || fits(HEAD_W.label, m.h, a?.h ?? 0)
+          ? []
+          : a !== null && fits(HEAD_W.tabs2, m.h, 0) && fits(HEAD_W.tabs2, 0, a.h)
+            ? ['figures', 'agents']
+            : ['tokens', 'cache', ...(a !== null ? (['agents'] as const) : [])]
+      // The tab last picked, or its nearest part in this layout.
+      const picked = await read($, menuTab)
+      const tab: UsagebandMenuTab | null =
+        tabs.length === 0
+          ? null
+          : tabs.includes(picked)
+            ? picked
+            : picked === 'figures'
+              ? 'tokens'
+              : picked === 'tokens' || picked === 'cache'
+                ? 'figures'
+                : (tabs[0] ?? null)
+      const figures = m === null || tab === 'agents' ? null : tab === 'tokens' || tab === 'cache' ? menuSvg(v, menuW, tab) : m
+      const tabButton = (which: UsagebandMenuTab) => (
+        <Button
+          key={`usageband-tab-${which}`}
+          label={which === 'agents' ? `${TAB_LABELS.agents} ${formatUsd(subTotal)}` : TAB_LABELS[which]}
+          {...(tab === which ? {} : { plain: true as const })}
+          onPress={() => void update($, menuTab, () => which)}
+        />
+      )
       return (
         <Box flexDirection="column">
           {m ? (
             <Box key="menu" flexDirection="column" backgroundColor={CARD_FILL} borderStyle="round" borderColor={CARD_BORDER}>
-              {/* A little taller than a text row, its controls apart; in a narrow pane they wrap, never clip. */}
+              {/* A little taller than a text row, its controls apart; in a narrow pane they wrap, never clip.
+                  When the menu cannot show whole, its label gives way to the two tabs (the one on show filled). */}
               <Box key="head" flexDirection="row" flexWrap="wrap" alignItems="center" paddingX={1} paddingY="xs" columnGap="sm" rowGap="xs">
-                <Text color={PAL.muted} size="caption" weight="semibold">
-                  DETAILS
-                </Text>
+                {tabs.length > 0 ? (
+                  tabs.map(tabButton)
+                ) : (
+                  <Text color={PAL.muted} size="caption" weight="semibold">
+                    DETAILS
+                  </Text>
+                )}
                 <Box key="space" flexGrow={1} />
                 {/* Updates: a button while a newer version waits on GitHub; the outcome stays beside it. */}
                 {rel?.note ? (
@@ -840,9 +896,9 @@ export const register: Register = on => {
                   </Box>
                 </Box>
               </Box>
-              {image('menu-svg', m.source, m.alt)}
-              {a ? (
-                <Box key="agents" flexDirection="column" backgroundColor={AGENTS_FILL} borderStyle="round" borderColor={AGENTS_BORDER} marginX={1} marginBottom={1}>
+              {figures ? image('menu-svg', figures.source, figures.alt) : null}
+              {a && (tab === null || tab === 'agents') ? (
+                <Box key="agents" flexDirection="column" backgroundColor={AGENTS_FILL} borderStyle="round" borderColor={AGENTS_BORDER} marginX={1} marginBottom="xs">
                   <Box key="agents-head" flexDirection="row" alignItems="center" paddingX={1}>
                     <Text color={PAL.muted} size="caption" weight="semibold">
                       SUBAGENTS
