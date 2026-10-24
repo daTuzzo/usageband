@@ -479,8 +479,9 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(ev)
     const hidden = (await read($, view)) === 'mini'
     const v = await bandView($)
+    // Each window: share left, LOW when under 15%, and when it resets ("5h 77% resets 2h41").
     const gauge = (name: string, g: Gauge | null): string =>
-      g ? `${name} ${g.left}%${g.left < LOW_UNDER ? ' LOW' : ''}` : `${name} --`
+      g ? `${name} ${g.left}%${g.left < LOW_UNDER ? ' LOW' : ''}${g.reset ? ` resets ${g.reset}` : ''}` : `${name} --`
     const newer = pendingUpdate(await read($, release))
     const status = [gauge('5h', v.h5), gauge('7d', v.d7), formatUsd(v.usd), ...(newer ? [`update ${newer}`] : [])].join(' │ ')
     if (status !== lastStatus) {
