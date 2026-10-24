@@ -113,8 +113,8 @@ const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 
 // ---------- What the band draws ----------
-/** One usage window: percent left (whole number), the time to its reset ('' when unknown), and when that is ('14:32', 'Fri 17:13'). */
-export type Gauge = { left: number; reset: string; at: string }
+/** One usage window: percent used (whole number), the time to its reset ('' when unknown), and when that is ('14:32', 'Fri 17:13'). */
+export type Gauge = { used: number; reset: string; at: string }
 /** What the next message costs on one model family. */
 export type Price = { id: string; name: string; usd: number; isMine: boolean }
 /** One subagent of this session and what its turns cost. */
@@ -407,14 +407,14 @@ const FITS: readonly Fit[] = [
 /** A reset time cut to its largest unit: "2h41" becomes "2h", "6d19h" becomes "6d"; "41m" and "now" stay. */
 const shortReset = (s: string): string => /^\d+[dh]/.exec(s)?.[0] ?? s
 
-/** 5H or 7D: name and reset on the top line; percent left, a dot bar, and LOW at the right end. */
+/** 5H or 7D: name and reset on the top line; percent used, a dot bar of it, and HIGH at the right end from 85% used. */
 const gaugeChip = (name: string, g: Gauge | null, fill: string, fit: Fit): Chip => {
   const head = [sLabel(name)]
   if (!g) return plainChip(head, [sSoft('--')], undefined, fit.pad)
   const resetText = fit.resets === 'full' ? g.reset : shortReset(g.reset)
   const reset = resetText ? [sLabel(resetText)] : []
-  const pct = [sVal(`${g.left}%`, fill)]
-  const low = g.left < 15 ? pill('LOW', PAL.d7, true) : null
+  const pct = fit.short ? [sVal(`${g.used}%`, fill)] : [sVal(`${g.used}%`, fill), sSoft('used', PAL.muted, 4)]
+  const low = g.used >= 85 ? pill('HIGH', PAL.d7, true) : null
   const lowW = low ? low.w + 6 : 0
   const top = lw(head) + (reset.length > 0 ? 10 + lw(reset) : 0)
   const bottom = spansW(pct) + (fit.dots ? 8 + DOTS_MIN_W : 0) + lowW
@@ -429,7 +429,7 @@ const gaugeChip = (name: string, g: Gauge | null, fill: string, fit: Fit): Chip 
         line(x0, y + CHIP_LABEL, head) +
         (reset.length > 0 ? line(x1, y + CHIP_LABEL, reset, 'end') : '') +
         line(x0, y + CHIP_VALUE, pct) +
-        (n > 0 ? dotsEndingAt(end, valueCy(y), n, litOf(g.left / 100, n), fill) : '') +
+        (n > 0 ? dotsEndingAt(end, valueCy(y), n, litOf(g.used / 100, n), fill) : '') +
         (low ? low.svg(x1 - low.w, y + CHIP_VALUE) : '')
       )
     },
@@ -482,7 +482,7 @@ const chipRow = (chips: Chip[], x: number, y: number, w: number, gap = CHIP_GAP)
 // Buttons are native, in a column Box beside the Svg; nothing here draws them.
 const bandAlt = (v: BandView): string => {
   const g = (name: string, x: Gauge | null) =>
-    x ? `${name} ${x.left}% left${x.left < 15 ? ', low' : ''}${x.reset ? `, resets in ${x.reset}` : ''}.` : `${name} unknown.`
+    x ? `${name} ${x.used}% used${x.used >= 85 ? ', high' : ''}${x.reset ? `, resets in ${x.reset}` : ''}.` : `${name} unknown.`
   const cache = v.cache ? (v.cache.mode === 'warm' ? `Cache warm, ${v.cache.time} left.` : `Cache cold, idle ${v.cache.time}.`) : 'Cache: none yet.'
   return `${g('5H', v.h5)} ${g('7D', v.d7)} ${cache} Spent $${v.usd.toFixed(2)}. ${fmtTok(totalOf(v))} tokens. ${v.prompts} prompts.`
 }
@@ -552,12 +552,9 @@ export const bandSvg = (v: BandView, widthPx: number, most = 6): { source: strin
 }
 
 // ---------- The menu: the same chips, drawn above the band ----------
-// One label line on top, SUBAGENTS with the page count at its right end; then rows
-// of equal chips: the subagents (paged), tokens, resets, the cache, and the next
-// message's price on each model nearest the band.
-const M_TOP = 24 // the label line
+// Two drawings for two native cards: the fixed figures (tokens, resets, the cache, and
+// the next message's price on each model), and the subagents, one page at a time.
 const M_PAD = 5
-const M_BOTTOM = 0 // the gap to the band is a native spacer, outside the menu card
 /** The least content width a menu chip reads in. */
 const MENU_MIN = 66
 
@@ -625,27 +622,36 @@ const resetChips = (v: BandView): Chip[] => [
   plainChip([sLabel('7D resets')], [sVal(v.d7?.at || v.d7?.reset || '--', PAL.d7)]),
 ]
 
-const capFor = (W: number): number => (W >= 860 ? 110 : W >= 440 ? 170 : 240)
-const menuH = (rows: number): number => M_TOP + 3 + rows * CHIP_H + (rows - 1) * CHIP_GAP + M_PAD + M_BOTTOM
+/** Height of a block of chip rows, with the card padding above and below. */
+const rowsH = (rows: number): number => 2 * M_PAD + rows * CHIP_H + Math.max(0, rows - 1) * CHIP_GAP
 
-type MenuPlan = { cols: number; rows: Chip[][]; perPage: number; pages: number; page: number }
+/** Equal-width chips, `cols` to a row. */
+const toRows = (chips: Chip[], cols: number): Chip[][] => {
+  const rows: Chip[][] = []
+  for (let i = 0; i < chips.length; i += cols) rows.push(chips.slice(i, i + cols))
+  return rows
+}
 
-/** Lays the menu out for a width: columns, rows, and how many subagents a page holds. */
-const planMenu = (v: BandView, W: number, page: number): MenuPlan => {
+/** The menu's fixed figures: tokens, resets, the cache, and the next message's price on each model. */
+const statsPlan = (v: BandView, W: number): { cols: number; rows: Chip[][] } => {
   const inner = W - 2 * M_PAD
   const cols = Math.max(2, Math.floor((inner + CHIP_GAP) / (MENU_MIN + 2 * CHIP_PX + CHIP_GAP)))
   const room = (inner - (cols - 1) * CHIP_GAP) / cols - 2 * CHIP_PX
   const fixed = [...group(tokenForms(v), room), ...resetChips(v), inCacheChip(v, room), lastReplyChip(v), ...group(nextForms(v), room)]
+  return { cols, rows: toRows(fixed, cols) }
+}
+
+/** The least width a subagent chip takes, so a name can be read. */
+const AGENT_MIN = 150
+
+/** The subagents, by cost, one row of them per page: as many to a row as the width holds, up to six. */
+const agentsPlan = (v: BandView, W: number, page: number): { cols: number; row: Chip[]; pages: number; page: number } => {
+  const inner = W - 2 * M_PAD
+  const cols = Math.max(1, Math.min(6, Math.floor((inner + CHIP_GAP) / (AGENT_MIN + CHIP_GAP))))
   const agents = [...v.agents].sort((a, b) => b.usd - a.usd)
-  // The subagents take whole rows: two where the height cap allows (440 px and wider),
-  // else one. Where not even one fits under the cap, they take the slots the rest leaves.
-  const fixedRows = Math.ceil(fixed.length / cols)
-  const own = [2, 1].find(n => (n === 1 || W >= 440) && menuH(n + fixedRows) <= capFor(W)) ?? 0
-  const rowsN = own > 0 ? own + fixedRows : Math.max(fixedRows, Math.floor((capFor(W) - menuH(1)) / (CHIP_H + CHIP_GAP)) + 1)
-  const perPage = Math.max(1, own > 0 ? own * cols : rowsN * cols - fixed.length)
-  const pages = Math.max(1, Math.ceil(agents.length / perPage))
+  const pages = Math.max(1, Math.ceil(agents.length / cols))
   const p = Math.max(0, Math.min(pages - 1, page))
-  const shown = agents.slice(p * perPage, p * perPage + perPage).map(
+  const row = agents.slice(p * cols, p * cols + cols).map(
     (g): Chip => ({
       min: 0,
       draw: (x, y, w) =>
@@ -653,55 +659,40 @@ const planMenu = (v: BandView, W: number, page: number): MenuPlan => {
         line(x + CHIP_PX, y + CHIP_VALUE, sMoney(g.usd, PAL.ink)),
     }),
   )
-  const rows: Chip[][] = []
-  const flat = [...shown, ...fixed]
-  if (own > 0) {
-    for (let i = 0; i < shown.length; i += cols) rows.push(shown.slice(i, i + cols))
-    for (let i = 0; i < fixed.length; i += cols) rows.push(fixed.slice(i, i + cols))
-  } else {
-    for (let i = 0; i < flat.length; i += cols) rows.push(flat.slice(i, i + cols))
-  }
-  return { cols, rows, perPage, pages, page: p }
+  return { cols, row, pages, page: p }
 }
 
 /** How many pages of subagents the menu shows at this width. */
-export const menuPages = (v: BandView, widthPx: number): number => planMenu(v, Math.max(120, Math.floor(widthPx)), 0).pages
+export const menuPages = (v: BandView, widthPx: number): number => agentsPlan(v, Math.max(120, Math.floor(widthPx)), 0).pages
 
-const menuAlt = (v: BandView, plan: MenuPlan): string => {
-  const total = v.agents.reduce((a, g) => a + g.usd, 0)
-  return [
-    `${v.agents.length} subagents cost $${total.toFixed(2)}; main thread $${Math.max(0, v.usd - total).toFixed(2)}; page ${plan.page + 1} of ${plan.pages}.`,
-    `Tokens ${fmtTok(v.input)} in, ${fmtTok(v.output)} out, cache read ${fmtTok(v.cacheRead)}, write ${fmtTok(v.cacheWrite)}.`,
+/** The open menu's fixed figures at the band's width. They never page: only the subagents do. */
+export const menuSvg = (v: BandView, widthPx: number): { source: string; w: number; h: number; alt: string } => {
+  const W = Math.max(120, Math.floor(widthPx))
+  const plan = statsPlan(v, W)
+  const H = rowsH(plan.rows.length)
+  let body = ''
+  plan.rows.forEach((row, r) => {
+    body += chipRow(row, M_PAD, M_PAD + r * (CHIP_H + CHIP_GAP), W - 2 * M_PAD)
+  })
+  const alt = [
+    `Tokens ${fmtTok(v.input)} new, ${fmtTok(v.output)} out, cache read ${fmtTok(v.cacheRead)}, write ${fmtTok(v.cacheWrite)}.`,
     `5H resets ${v.h5?.at || 'unknown'}, 7D ${v.d7?.at || 'unknown'}.`,
     `${fmtTok(v.tokens)} tokens in cache${v.share === null ? '' : `, ${Math.round(v.share * 100)}% of the context`}.`,
     `Next message if sent now: ${v.prices.map(p => `${p.name.toLowerCase()} $${p.usd.toFixed(2)}${p.isMine ? ' (this model)' : ''}`).join(', ')}.`,
   ].join(' ')
+  return { source: svgDoc(W, H, body), w: W, h: H, alt }
 }
 
-/** The open menu at the band's width, page `page` (0-based) of the subagents; it sits above the band. */
-export const menuSvg = (
+/** One page of subagents, by cost, for the menu's own subagents card. */
+export const agentsSvg = (
   v: BandView,
   widthPx: number,
   page: number,
-): { source: string; w: number; h: number; alt: string; cols: number; page: number; pages: number } => {
+): { source: string; w: number; h: number; alt: string; page: number; pages: number } => {
   const W = Math.max(120, Math.floor(widthPx))
-  const plan = planMenu(v, W, page)
-  const H = menuH(plan.rows.length)
-  // The menu card (background, border, header strip, pager) is native; the Svg draws its content.
-  let body = ''
-  // The subagents line: "SUBAGENTS · $2.53 · MAIN $0.89 · BY COST", shorter where the width is less.
-  const total = v.agents.reduce((a, g) => a + g.usd, 0)
-  const amount = (n: number, dx: number): Span => ({ ...sLabel(`$${n.toFixed(2)}`, PAL.ink, dx), weight: 600 })
-  const dot = (): Span => sLabel('·', PAL.muted, 5)
-  const forms: Span[][] = [
-    [sLabel('subagents'), dot(), amount(total, 5), dot(), sLabel('main', PAL.muted, 5), amount(Math.max(0, v.usd - total), 5), dot(), sLabel('by cost', PAL.muted, 5)],
-    [sLabel('subagents'), dot(), amount(total, 5), dot(), sLabel('main', PAL.muted, 5), amount(Math.max(0, v.usd - total), 5)],
-    [sLabel('sub'), amount(total, 5), dot(), sLabel('main', PAL.muted, 5), amount(Math.max(0, v.usd - total), 5)],
-  ]
-  const room = W - 2 * (M_PAD + CHIP_PX)
-  body += line(M_PAD + CHIP_PX, 16, forms.find(f => lw(f) <= room) ?? forms[forms.length - 1] ?? [])
-  plan.rows.forEach((row, r) => {
-    body += chipRow(row, M_PAD, M_TOP + 3 + r * (CHIP_H + CHIP_GAP), W - 2 * M_PAD)
-  })
-  return { source: svgDoc(W, H, body), w: W, h: H, alt: menuAlt(v, plan), cols: plan.cols, page: plan.page, pages: plan.pages }
+  const plan = agentsPlan(v, W, page)
+  const H = rowsH(1)
+  const body = chipRow(plan.row, M_PAD, M_PAD, W - 2 * M_PAD)
+  const alt = plan.row.length === 0 ? 'No subagents yet.' : `Subagents, page ${plan.page + 1} of ${plan.pages}.`
+  return { source: svgDoc(W, H, body), w: W, h: H, alt, page: plan.page, pages: plan.pages }
 }

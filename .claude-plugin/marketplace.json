@@ -5,7 +5,7 @@
     {
       "name": "usageband",
       "source": "./",
-      "description": "Usage at a glance: 5-hour and 7-day limits left, prompt cache warm or cold, next message cost, spend and tokens, in a compact band and a footer line."
+      "description": "Usage at a glance: 5-hour and 7-day limits used, prompt cache warm or cold, next message cost, spend and tokens, in a compact band and a footer line."
     }
   ]
 }
