@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 
 import type { KeepWarm, UsagebandLimit } from '../types'
 import {
-  PING_AFTER_MS, keepWarmStep, offKeepWarm, parseHours, pingCost, pingFoundCold, retimeKeepWarm, startKeepWarm, toggleKeepWarm,
+  PING_AFTER_MS, keepWarmStep, offKeepWarm, parseHours, pingCost, pingFoundCold, retimeKeepWarm, startKeepWarm, toggleKeepWarm, usedNow,
 } from '../hooks/keepwarm'
 import { CACHE_TTL_MS } from '../hooks/pricing'
 import type { Family } from '../hooks/pricing'
@@ -124,15 +124,32 @@ for (const [family, coldUsd] of [['opus', 5.504], ['sonnet', 2.752]] as const) {
   console.log(`5h at 5% left: no ping, stops: ${r.stop}`)
 }
 
-// A running turn holds pings back; a cache that already went cold stops it.
+// A running turn holds pings back; a cache gone cold makes it wait (no ping, no stop), and a
+// message that warms the cache again lets the pings go on.
 {
   const kw = on(8)
   const warm = { state: 'warm' as const, idleMs: PING_AFTER_MS + 5000, tokens: 688_000, family: 'opus' as const }
   assert.equal(keepWarmStep(kw, { ...warm, idleMs: 2 * MIN }, OK_LIMITS, 2 * MIN, true).act, 'wait')
   const cold = { ...warm, state: 'cold' as const, idleMs: CACHE_TTL_MS + 1 }
-  assert.deepEqual(keepWarmStep(kw, cold, OK_LIMITS, CACHE_TTL_MS + 1, false), { act: 'stop', note: 'cache went cold' })
+  assert.deepEqual(keepWarmStep(kw, cold, OK_LIMITS, CACHE_TTL_MS + 1, false), { act: 'wait' })
+  assert.equal(keepWarmStep(kw, warm, OK_LIMITS, 3 * HOUR, false).act, 'ping', 'warm again: it pings')
   assert.equal(keepWarmStep(null, warm, OK_LIMITS, 0, false).act, 'idle')
-  console.log('a running turn waits; a cold cache stops it; off stays idle')
+  console.log('a running turn waits; a cold cache waits for the next message; off stays idle')
+}
+
+// A window whose reset has passed started over: its old reading no longer stops the timer.
+{
+  const kw = on(8)
+  const due = { state: 'warm' as const, idleMs: PING_AFTER_MS + 5000, tokens: 688_000, family: 'opus' as const }
+  const now = 5 * HOUR
+  const stale: UsagebandLimit[] = [
+    { kind: 'five_hour', usedPct: 95, resetsAt: new Date(now - MIN).toISOString() },
+    { kind: 'seven_day', usedPct: 30 },
+  ]
+  assert.equal(usedNow(stale[0]!, now), 0)
+  assert.equal(usedNow({ ...stale[0]!, resetsAt: new Date(now + MIN).toISOString() }, now), 95)
+  assert.equal(keepWarmStep(kw, due, stale, now, false).act, 'ping')
+  console.log('a passed reset reads as 0% used')
 }
 
 // A turn flag left on (an interrupted turn that never reported its end) must not hold pings back.

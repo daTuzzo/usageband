@@ -65,6 +65,15 @@ export const parseHours = (text: string): number | null => {
   return hours >= MIN_HOURS && hours <= MAX_HOURS ? hours : null
 }
 
+/**
+ * A limit's share used now: 0 once its reset time has passed, since the window started
+ * over. The engine's figure is the last response's, and stays until the next response.
+ */
+export const usedNow = (lim: UsagebandLimit, nowMs: number): number => {
+  const resetAt = lim.resetsAt ? Date.parse(lim.resetsAt) : Number.NaN
+  return !Number.isNaN(resetAt) && resetAt <= nowMs ? 0 : lim.usedPct
+}
+
 /** What one ping costs: a read of the whole cache, plus its own line in and a one-word reply out. */
 export const pingCost = (family: Family, tokens: number): number => {
   const rates = PRICES[family]
@@ -88,12 +97,17 @@ export const keepWarmStep = (
   if (turnOpen && (cache === null || cache.idleMs < PING_STALE_MS)) return { act: 'wait' }
   if (kw.pendingAt > 0 && now - kw.pendingAt < PING_STALE_MS) return { act: 'wait' }
   if (cache === null || cache.idleMs < PING_AFTER_MS) return { act: 'wait' }
-  if (cache.state === 'cold') return { act: 'stop', note: 'cache went cold' }
+  // A cold cache cannot be kept: a ping would only re-write it at a cold send's price. The
+  // timer waits instead, and pings again once the next message has warmed the cache.
+  if (cache.state === 'cold') return { act: 'wait' }
   if (cache.family === null) return { act: 'stop', note: 'model not priced' }
   const coldUsd = nextMessageCost(PRICES[cache.family], false, cache.tokens)
   if (coldUsd < MIN_COLD_USD) return { act: 'stop', note: 'cache too small to keep' }
   if (kw.spent + pingCost(cache.family, cache.tokens) > coldUsd * BUDGET_SHARE) return { act: 'stop', note: 'budget used' }
-  const left = (kind: string): number => 100 - (limits.find(x => x.kind === kind)?.usedPct ?? 0)
+  const left = (kind: string): number => {
+    const lim = limits.find(x => x.kind === kind)
+    return 100 - (lim === undefined ? 0 : usedNow(lim, now))
+  }
   if (left('five_hour') < MIN_5H_LEFT || left('seven_day') < MIN_7D_LEFT) return { act: 'stop', note: 'usage low' }
   return { act: 'ping' }
 }

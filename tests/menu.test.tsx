@@ -63,10 +63,10 @@ test('the details header: keep warm button and length, timer pill, mascot drawn'
     expect((await props(ui, 'usageband-keepwarm'))?.variant).toBeUndefined()
     expect((await svgs(ui)).some(s => s.alt.startsWith('Keep warm'))).toBe(false)
 
-    // The button starts it: primary while it runs, and the timer pill shows the time left.
+    // The button starts it, keeping its look; the timer pill shows the time left.
     await ui.press({ key: 'usageband-keepwarm' })
     expect((await props(ui, 'usageband-keepwarm'))?.label).toBe('Keep warm')
-    expect((await props(ui, 'usageband-keepwarm'))?.variant).toBe('primary')
+    expect((await props(ui, 'usageband-keepwarm'))?.variant).toBeUndefined() // one look in every build
     const pill = (await svgs(ui)).find(s => s.alt.startsWith('Keep warm'))
     expect(pill?.alt).toBe('Keep warm: 1d0h left, 0 pings sent.')
     expect(pill?.source).toContain('stroke-dasharray')
@@ -213,7 +213,9 @@ test("the open menu fits the band's slot: whole, else two tabs, else three", asy
   // Narrower: two tabs, the figures first; the subagents tab swaps them.
   const mid = await mountAt(72)
   expect(await tabKeys(mid)).toEqual(['usageband-tab-figures', 'usageband-tab-agents'])
-  expect((await props(mid, 'usageband-tab-figures'))?.plain).toBeUndefined()
+  // Plain text tabs: the one on show at full strength, the other dim.
+  expect((await props(mid, 'usageband-tab-figures'))?.dimColor).toBeUndefined()
+  expect((await props(mid, 'usageband-tab-agents'))?.dimColor).toBe(true)
   expect((await props(mid, 'usageband-tab-agents'))?.plain).toBe(true)
   expect((await parts(mid)).agents).toBeUndefined()
   await mid.press({ key: 'usageband-tab-agents' })
