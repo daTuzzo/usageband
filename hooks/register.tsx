@@ -1,10 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CacheClock, KeepWarm, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandRelease, UsagebandView } from '../types'
+import type { CacheClock, KeepWarm, UsagebandAgentNames, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandRelease, UsagebandView } from '../types'
 import {
   CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, PAL,
-  bandSvg, fmtTok, menuPages, menuSvg, shortSpan, svgPx, tone,
+  agentsSvg, bandSvg, fmtTok, menuPages, menuSvg, shortSpan, svgPx, tone,
 } from './art'
 import type { BandView, Gauge } from './art'
 import { PING_TEXT, keepWarmStep, nextKeepWarm, pingFoundCold } from './keepwarm'
@@ -20,11 +20,14 @@ import type { CacheState, Family } from './pricing'
 /** Redraw interval: keeps the cache countdown and the warm/cold switch on time, and catches a missed resize. */
 const REDRAW_MS = 10_000
 /** A limit under this share left is flagged LOW. */
-const LOW_UNDER = 15
+const HIGH_FROM = 85
 const NO_COUNTS: UsagebandCounters = { prompts: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 /** The menu's card: a shade darker than the band, its border #ffffff14 laid over that shade. */
 const CARD_FILL = '#181713'
 const CARD_BORDER = '#2a2925'
+/** The subagents card inside the menu: a lighter shade and its own border, so the part that pages stands apart. */
+const AGENTS_FILL = '#211f1a'
+const AGENTS_BORDER = '#3a372e'
 /** Six pixels of air between the menu's card and the band. */
 const AIR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="6" viewBox="0 0 1 6"></svg>'
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -35,6 +38,7 @@ const limits = atom({ plugin: 'usageband', key: 'limits' } as const, [] as Usage
 const cacheClock = atom({ plugin: 'usageband', key: 'cacheClock' } as const, null as CacheClock | null)
 const counters = atom({ plugin: 'usageband', key: 'counters' } as const, NO_COUNTS)
 const agentSpend = atom({ plugin: 'usageband', key: 'agentSpend' } as const, {} as UsagebandAgents)
+const agentNames = atom({ plugin: 'usageband', key: 'agentNames' } as const, {} as UsagebandAgentNames)
 const view = atom({ plugin: 'usageband', key: 'view' } as const, 'band' as UsagebandView)
 const page = atom({ plugin: 'usageband', key: 'page' } as const, 0)
 const mascot = atom({ plugin: 'usageband', key: 'mascot' } as const, false)
@@ -192,7 +196,7 @@ const gaugeFor = (all: UsagebandLimit[], kind: string, nowMs: number): Gauge | n
   const when = new Date(resetAt)
   const known = !Number.isNaN(resetAt)
   return {
-    left: Math.max(0, Math.round(100 - lim.usedPct)),
+    used: Math.min(100, Math.max(0, Math.round(lim.usedPct))),
     reset: !known ? '' : untilMs <= 0 ? 'now' : shortSpan(untilMs),
     at: !known ? '' : untilMs < 86_400_000 ? clockText(when) : `${WEEKDAYS[when.getDay()] ?? ''} ${clockText(when)}`,
   }
@@ -211,10 +215,11 @@ const bandView = async ($: EngineInterface): Promise<BandView> => {
   } catch {
     spent = 0
   }
-  const names = new Map<string, string>()
-  if (Object.keys(byAgent).length > 0) {
+  // Names recorded at spawn first; the engine's live list only for an agent spawned before the mod loaded.
+  const names = new Map<string, string>(Object.entries(await read($, agentNames)))
+  if (Object.keys(byAgent).some(id => !names.has(id))) {
     try {
-      for (const a of await $.agent.list()) names.set(a.id, a.description || a.type)
+      for (const a of await $.agent.list()) if (!names.has(a.id)) names.set(a.id, a.description || a.type)
     } catch {
       // Names are only a label: an agent no longer listed shows as "subagent".
     }
@@ -256,8 +261,8 @@ const bandView = async ($: EngineInterface): Promise<BandView> => {
 // ---------- The terminal's text form ----------
 type Seg = { t: string; color: string; bold?: boolean }
 
-const dotGauge = (left: number, color: string): Seg[] => {
-  const lit = Math.max(0, Math.min(10, Math.round(left / 10)))
+const dotGauge = (used: number, color: string): Seg[] => {
+  const lit = Math.max(0, Math.min(10, Math.round(used / 10)))
   return [
     { t: '●'.repeat(lit), color },
     { t: '·'.repeat(10 - lit), color: PAL.track },
@@ -282,9 +287,9 @@ const bandItems = (v: BandView): Seg[][] => {
     g
       ? [
           { t: `${name} `, color: PAL.muted },
-          { t: `${g.left}% `, color, bold: true },
-          ...(g.left < LOW_UNDER ? [{ t: 'LOW ', color: PAL.d7, bold: true }] : []),
-          ...dotGauge(g.left, color),
+          { t: `${g.used}% used `, color, bold: true },
+          ...(g.used >= HIGH_FROM ? [{ t: 'HIGH ', color: PAL.d7, bold: true }] : []),
+          ...dotGauge(g.used, color),
           ...(g.reset ? [{ t: ` ${g.reset}`, color: PAL.muted }] : []),
         ]
       : [{ t: `${name} --`, color: PAL.muted }]
@@ -390,6 +395,7 @@ export const register: Register = on => {
     if (begin.source === 'clear') {
       await update($, counters, () => NO_COUNTS)
       await update($, agentSpend, () => ({}))
+      await update($, agentNames, () => ({}))
       await update($, page, () => 0)
     }
     if (begin.source === 'clear' || begin.source === 'compact') {
@@ -462,6 +468,16 @@ export const register: Register = on => {
     return answer
   })
 
+  // A subagent's name is known only while it starts: record its task description (else
+  // its type) under the id it gets, so the menu can name it after it has finished.
+  on('agent.spawn', async ($, spawn, next) => {
+    const result = await next(spawn)
+    const agentId = result.agentId
+    const name = spawn.description || spawn.subagentType
+    if (agentId && name) await update($, agentNames, names => ({ ...names, [agentId]: name }))
+    return result
+  }).catch(($, spawn, next) => next(spawn)) // naming never blocks a spawn
+
   on('command.run', { command: 'band' }, async $ => {
     await setView($, x => (x === 'mini' ? 'band' : 'mini'))
     return (await read($, view)) === 'mini'
@@ -479,9 +495,9 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(ev)
     const hidden = (await read($, view)) === 'mini'
     const v = await bandView($)
-    // Each window: share left, LOW when under 15%, and when it resets ("5h 77% resets 2h41").
+    // Each window: share used (as Claude Code reports it), HIGH from 85%, and when it resets ("5h 23% used, resets 2h41").
     const gauge = (name: string, g: Gauge | null): string =>
-      g ? `${name} ${g.left}%${g.left < LOW_UNDER ? ' LOW' : ''}${g.reset ? ` resets ${g.reset}` : ''}` : `${name} --`
+      g ? `${name} ${g.used}% used${g.used >= HIGH_FROM ? ' HIGH' : ''}${g.reset ? `, resets ${g.reset}` : ''}` : `${name} --`
     const newer = pendingUpdate(await read($, release))
     const status = [gauge('5h', v.h5), gauge('7d', v.d7), formatUsd(v.usd), ...(newer ? [`update ${newer}`] : [])].join(' │ ')
     if (status !== lastStatus) {
@@ -559,10 +575,15 @@ export const register: Register = on => {
       const wide = one.rows === 1
       const b = wide ? one : bandSvg(v, svgPx(cols, CONTROLS_COL_CELLS), 3)
       const menuW = svgPx(cols, 2)
-      const m = isOpen ? menuSvg(v, menuW, await read($, page)) : null
+      const m = isOpen ? menuSvg(v, menuW) : null
+      // The subagents get their own card inside the menu, with their own pager: paging moves
+      // only them, never the fixed figures above. The card sits 2 cells in from each side.
+      const agentsW = svgPx(cols, 6)
+      const a = isOpen && v.agents.length > 0 ? agentsSvg(v, agentsW, await read($, page)) : null
+      const subTotal = v.agents.reduce((sum, g) => sum + g.usd, 0)
       // The pager counts pages afresh when pressed, never from what this draw saw.
       const turn = (step: number) => async () => {
-        const pages = menuPages(await bandView($), menuW)
+        const pages = menuPages(await bandView($), agentsW)
         await update($, page, x => Math.max(0, Math.min(pages - 1, Math.min(pages - 1, x) + step)))
       }
       return (
@@ -592,17 +613,30 @@ export const register: Register = on => {
                   label={warmLeftMs > 0 ? `keep warm ${shortSpan(warmLeftMs)}${kw && kw.pings > 0 ? ` (${kw.pings})` : ''}` : 'keep warm off'}
                   onPress={() => void stepKeepWarm($)}
                 />
-                {/* The mascot setting: part of the header row, left of the pager. */}
+                {/* The mascot setting: part of the header row. */}
                 <Button key="usageband-mascot" plain label={v.mascot ? 'mascot on' : 'mascot off'} onPress={() => void flipMascot($)} />
-                {m.pages > 1
-                  ? [
-                      <Button key="usageband-prev" plain label="‹" onPress={() => void turn(-1)()} />,
-                      <Text key="count" color={PAL.muted} tabular>{` ${m.page + 1}/${m.pages} `}</Text>,
-                      <Button key="usageband-next" plain label="›" onPress={() => void turn(1)()} />,
-                    ]
-                  : null}
               </Box>
               {image('menu-svg', m.source, m.alt)}
+              {a ? (
+                <Box key="agents" flexDirection="column" backgroundColor={AGENTS_FILL} borderStyle="round" borderColor={AGENTS_BORDER} marginX={1} marginBottom={1}>
+                  <Box key="agents-head" flexDirection="row" alignItems="center" paddingX={1}>
+                    <Text color={PAL.muted} size="caption" weight="semibold">
+                      SUBAGENTS
+                    </Text>
+                    <Text color={PAL.ink} size="caption" weight="semibold">{` ${formatUsd(subTotal)}`}</Text>
+                    <Text color={PAL.muted} size="caption">{` · ${v.agents.length} ran · main ${formatUsd(Math.max(0, v.usd - subTotal))} · by cost`}</Text>
+                    <Box key="agents-space" flexGrow={1} />
+                    {a.pages > 1
+                      ? [
+                          <Button key="usageband-prev" plain label="‹" onPress={() => void turn(-1)()} />,
+                          <Text key="count" color={PAL.muted} tabular>{` ${a.page + 1}/${a.pages} `}</Text>,
+                          <Button key="usageband-next" plain label="›" onPress={() => void turn(1)()} />,
+                        ]
+                      : null}
+                  </Box>
+                  {image('agents-svg', a.source, a.alt)}
+                </Box>
+              ) : null}
             </Box>
           ) : null}
           {m ? <Svg key="gap" source={AIR_SVG} alt="" /> : null}

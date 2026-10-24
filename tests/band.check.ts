@@ -7,8 +7,8 @@ import { bandSvg } from '../hooks/art'
 import type { BandView } from '../hooks/art'
 
 const v: BandView = {
-  h5: { left: 98, reset: '5m', at: '00:30' },
-  d7: { left: 71, reset: '6d19h', at: 'Thu 22:00' },
+  h5: { used: 2, reset: '5m', at: '00:30' },
+  d7: { used: 29, reset: '6d19h', at: 'Thu 22:00' },
   cache: { mode: 'warm', time: '38m', idleMin: 22 },
   tokens: 765_000,
   window: 1_000_000,
