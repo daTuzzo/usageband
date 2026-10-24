@@ -14,8 +14,11 @@ export type UsagebandCounters = { prompts: number; input: number; output: number
 /** Dollars spent by each subagent, keyed by its agent id. */
 export type UsagebandAgents = Record<string, number>
 
-/** Each subagent's name (its task description, else its type), recorded when it spawns, keyed by agent id. */
-export type UsagebandAgentNames = Record<string, string>
+/**
+ * What is known of each subagent, keyed by agent id: its task description (at spawn), the
+ * first line of its first prompt, its agent type, and the model its turns ran on.
+ */
+export type UsagebandAgentInfo = Record<string, { description?: string; prompt?: string; type?: string; model?: string }>
 
 /** What the mod shows: nothing above the prompt (mini), the band, or the band with its menu. Remembered in $.store. */
 export type UsagebandView = 'mini' | 'band' | 'open'
@@ -38,7 +41,9 @@ declare module "claude-code" {
       cacheClock: CacheClock | null
       counters: UsagebandCounters
       agentSpend: UsagebandAgents
-      agentNames: UsagebandAgentNames
+      agentInfo: UsagebandAgentInfo
+      /** Whether the subagents with no name show as one chip (true) or one chip each. */
+      groupUnnamed: boolean
       view: UsagebandView
       /** The menu's page of subagents, counting from 0. */
       page: number

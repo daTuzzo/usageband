@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CacheClock, KeepWarm, UsagebandAgentNames, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandRelease, UsagebandView } from '../types'
+import type { CacheClock, KeepWarm, UsagebandAgentInfo, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandRelease, UsagebandView } from '../types'
 import {
   CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, MASCOT_ICON, PAL,
   agentsSvg, bandSvg, fmtTok, mascotIconSvg, menuPages, menuSvg, shortSpan, svgPx, timerPillSvg, tone,
@@ -41,7 +41,18 @@ const limits = atom({ plugin: 'usageband', key: 'limits' } as const, [] as Usage
 const cacheClock = atom({ plugin: 'usageband', key: 'cacheClock' } as const, null as CacheClock | null)
 const counters = atom({ plugin: 'usageband', key: 'counters' } as const, NO_COUNTS)
 const agentSpend = atom({ plugin: 'usageband', key: 'agentSpend' } as const, {} as UsagebandAgents)
-const agentNames = atom({ plugin: 'usageband', key: 'agentNames' } as const, {} as UsagebandAgentNames)
+const agentInfo = atom({ plugin: 'usageband', key: 'agentInfo' } as const, {} as UsagebandAgentInfo)
+const groupUnnamed = atom({ plugin: 'usageband', key: 'groupUnnamed' } as const, false)
+
+/** Adds what was just learned of one subagent to what is known of it. */
+const learnAgent = ($: EngineInterface, agentId: string, info: UsagebandAgentInfo[string]): Promise<unknown> =>
+  update($, agentInfo, all => ({ ...all, [agentId]: { ...all[agentId], ...info } }))
+
+/** The first line of a prompt, as a name: at most 80 characters. '' for a prompt with no words. */
+const firstLine = (text: string): string => {
+  const line = text.split('\n').map(s => s.trim()).find(s => s !== '') ?? ''
+  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line
+}
 const view = atom({ plugin: 'usageband', key: 'view' } as const, 'band' as UsagebandView)
 const page = atom({ plugin: 'usageband', key: 'page' } as const, 0)
 const mascot = atom({ plugin: 'usageband', key: 'mascot' } as const, false)
@@ -303,14 +314,20 @@ const bandView = async ($: EngineInterface): Promise<BandView> => {
   } catch {
     spent = 0
   }
-  // Names recorded at spawn first; then, for an agent spawned before this version loaded,
-  // the engine's list and the agent's record on disk. Runs with no name anywhere (the
-  // engine's own work) are shown together, as one "unnamed" entry.
-  const names = new Map<string, string>(Object.entries(await read($, agentNames)))
+  // A name for each subagent, best first: its task description (recorded at spawn, else in
+  // the engine's list, else in its record on disk), then the first line of its first prompt,
+  // then its agent type. A run with none of these (the engine's own work) is named by its
+  // model, one chip each, or all in one chip while "Collapse unnamed" is on.
+  const info = await read($, agentInfo)
+  const names = new Map<string, string>()
+  for (const id of Object.keys(byAgent)) {
+    const told = info[id]?.description
+    if (told) names.set(id, told)
+  }
   const nameless = (): string[] => Object.keys(byAgent).filter(id => !names.has(id))
   if (nameless().length > 0) {
     try {
-      for (const a of await $.agent.list()) if (!names.has(a.id) && (a.description || a.type)) names.set(a.id, a.description || a.type)
+      for (const a of await $.agent.list()) if (!names.has(a.id) && a.id in byAgent && a.description) names.set(a.id, a.description)
     } catch {
       // Names are only a label: the record on disk is tried next.
     }
@@ -322,19 +339,34 @@ const bandView = async ($: EngineInterface): Promise<BandView> => {
       if (name !== null) names.set(id, name)
     }
   }
+  for (const id of nameless()) {
+    const fallback = info[id]?.prompt || info[id]?.type
+    if (fallback) names.set(id, fallback)
+  }
   const agents: AgentCost[] = Object.entries(byAgent).flatMap(([id, usd]) => {
     const name = names.get(id)
     return name === undefined ? [] : [{ name, usd, full: name }]
   })
   const unnamed = nameless()
-  if (unnamed.length > 0) {
-    const n = unnamed.length
+  const why = "no task name was recorded: the engine's own work (compaction, memory, summaries), or a subagent from before this version loaded"
+  if ((await read($, groupUnnamed)) && unnamed.length > 1) {
     agents.push({
-      name: `unnamed (${n})`,
+      name: `unnamed (${unnamed.length})`,
       usd: unnamed.reduce((sum, id) => sum + (byAgent[id] ?? 0), 0),
-      full: `${n} run${n === 1 ? '' : 's'} with no task name: the engine's own work (compaction, memory, summaries), or subagents from before this version loaded`,
+      full: `${unnamed.length} runs: ${why}`,
       dim: true,
     })
+  } else {
+    for (const id of unnamed) {
+      const model = info[id]?.model
+      const family = familyFor(model)
+      agents.push({
+        name: family === null ? 'unnamed run' : `${family.charAt(0).toUpperCase()}${family.slice(1)} run`,
+        usd: byAgent[id] ?? 0,
+        full: `Run ${id}${model ? ` on ${model}` : ''}: ${why}`,
+        dim: true,
+      })
+    }
   }
   const warm = cache === null || cache.state === 'warm'
   const tokens = cache?.tokens ?? 0
@@ -367,6 +399,7 @@ const bandView = async ($: EngineInterface): Promise<BandView> => {
     cacheWrite: totals.cacheWrite,
     agents,
     agentRuns: Object.keys(byAgent).length,
+    unnamedRuns: unnamed.length,
     mascot: await read($, mascot),
   }
 }
@@ -513,7 +546,7 @@ export const register: Register = on => {
     if (begin.source === 'clear') {
       await update($, counters, () => NO_COUNTS)
       await update($, agentSpend, () => ({}))
-      await update($, agentNames, () => ({}))
+      await update($, agentInfo, () => ({}))
       await update($, page, () => 0)
     }
     if (begin.source === 'clear' || begin.source === 'compact') {
@@ -548,8 +581,21 @@ export const register: Register = on => {
     return yield* next(step)
   })
 
+  // A subagent's first prompt: its first line names a subagent that has no task description
+  // (a workflow's agent has none in its record).
+  on('turn.start', async ($, start, next) => {
+    const answer = await next(start)
+    const agentId = start.agentId
+    const line = firstLine(start.text)
+    if (agentId !== undefined && line !== '' && (await read($, agentInfo))[agentId]?.prompt === undefined) {
+      await learnAgent($, agentId, { prompt: line })
+    }
+    return answer
+  }).catch(($, start, next) => next(start)) // naming never holds a turn back
+
   // Tokens add up over every turn, subagents' included, so they agree with the session's cost.
-  // A subagent's turn is priced here too, at its model's rates: the engine has no per-agent cost.
+  // A subagent's turn is priced here too, at its model's rates, its cache writes at the
+  // 5-minute rate it writes at: the engine has no per-agent cost.
   on('turn.complete', async ($, done, next) => {
     const answer = await next(done)
     const used = done.usage
@@ -565,8 +611,9 @@ export const register: Register = on => {
     const agentId = done.agentId
     if (agentId !== undefined) {
       if (used) {
-        const cost = requestCost(used.model, used)
+        const cost = requestCost(used.model, used, '5m')
         await update($, agentSpend, spend => ({ ...spend, [agentId]: (spend[agentId] ?? 0) + cost }))
+        if (used.model) await learnAgent($, agentId, { model: used.model })
       }
       return answer
     }
@@ -586,24 +633,35 @@ export const register: Register = on => {
     return answer
   })
 
-  // A subagent's name is known only while it starts: record its task description (else
-  // its type) under the id it gets, so the menu can name it after it has finished.
+  // A subagent's name is known only while it starts: record its task description and its
+  // type under the id it gets, so the menu can name it after it has finished.
   on('agent.spawn', async ($, spawn, next) => {
     const result = await next(spawn)
     const agentId = result.agentId
-    const name = spawn.description || spawn.subagentType
-    if (agentId && name) await update($, agentNames, names => ({ ...names, [agentId]: name }))
+    if (agentId) {
+      await learnAgent($, agentId, {
+        ...(spawn.description ? { description: spawn.description } : {}),
+        ...(spawn.subagentType ? { type: spawn.subagentType } : {}),
+      })
+    }
     return result
   }).catch(($, spawn, next) => next(spawn)) // naming never blocks a spawn
 
-  // A subagent starting names the folder of the session's subagent records, so a session
-  // already running when this version loaded can name the subagents it had before.
+  // The folder of the session's subagent records, learned from any of these events, so a
+  // session already running when this version loaded names its earlier subagents after its
+  // next turn ends.
   on('classic.SubagentStart', async ($, start, next) => {
     const answer = await next(start)
     const dir = subagentsDirOf(start.transcript_path)
     if (dir !== null) await update($, subagentDir, () => dir)
     return answer
   }).catch(($, start, next) => next(start))
+  on('classic.Stop', async ($, stop, next) => {
+    const answer = await next(stop)
+    const dir = subagentsDirOf(stop.transcript_path)
+    if (dir !== null && dir !== (await read($, subagentDir))) await update($, subagentDir, () => dir)
+    return answer
+  }).catch(($, stop, next) => next(stop))
 
   on('command.run', { command: 'band' }, async $ => {
     await setView($, x => (x === 'mini' ? 'band' : 'mini'))
@@ -684,6 +742,7 @@ export const register: Register = on => {
           ? timerPillSvg({ note: kw.note })
           : null
     const face = mascotIconSvg(await read($, mascot))
+    const grouped = await read($, groupUnnamed)
     const rel = await read($, release)
     const newer = pendingUpdate(rel)
 
@@ -791,6 +850,14 @@ export const register: Register = on => {
                     <Text color={PAL.ink} size="caption" weight="semibold">{` ${formatUsd(subTotal)}`}</Text>
                     <Text color={PAL.muted} size="caption">{` · ${v.agentRuns} ran · main ${formatUsd(Math.max(0, v.usd - subTotal))} · by cost`}</Text>
                     <Box key="agents-space" flexGrow={1} />
+                    {/* Runs with no name: one chip each, or all in one chip; this button switches. */}
+                    {v.unnamedRuns > 1 ? (
+                      <Button
+                        key="usageband-unnamed"
+                        label={grouped ? 'Expand unnamed' : 'Collapse unnamed'}
+                        onPress={() => void update($, groupUnnamed, x => !x)}
+                      />
+                    ) : null}
                     {a.pages > 1
                       ? [
                           <Button key="usageband-prev" plain label="‹" onPress={() => void turn(-1)()} />,
