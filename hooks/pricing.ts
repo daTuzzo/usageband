@@ -9,21 +9,31 @@ export const CACHE_TTL_MS = 60 * 60_000
 
 export type Family = 'fable' | 'opus' | 'sonnet' | 'haiku'
 
-/** US dollars per million tokens, by kind of token. */
-export type Rates = { input: number; output: number; cacheRead: number; cacheWrite: number }
+/**
+ * US dollars per million tokens, by kind of token. `cacheWrite` is the 1-hour cache write,
+ * `cacheWrite5m` the 5-minute one.
+ */
+export type Rates = { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite5m: number }
+
+/**
+ * How long a request's cache writes last: the main thread writes the 1-hour cache, a
+ * subagent the 5-minute one (every write in the transcripts, 2026-10-24).
+ */
+export type CacheTtl = '1h' | '5m'
 
 /** The families in the order the band lists them. */
 export const FAMILIES: readonly Family[] = ['fable', 'opus', 'sonnet', 'haiku']
 
-// Anthropic's list prices. cacheWrite is the 1-hour write (twice the input price),
-// the one Claude Code uses; Haiku is at its rate above 100K tokens, which long
-// sessions pay.
-// List prices checked 2026-10-23 against the Claude API reference (cached 2026-10-06).
+// Anthropic's list prices. cacheWrite is the 1-hour write (twice the input price), the one
+// Claude Code's main thread uses; cacheWrite5m (1.25x input) is what subagents write. Haiku
+// is at its rate above 100K tokens, which long sessions pay.
+// List prices checked 2026-10-23 against the Claude API reference (cached 2026-10-06); both
+// write rates match the pricing tiers in Claude Code 2.1.308's own model catalog.
 export const PRICES: Record<Family, Rates> = {
-  fable: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 20 },
-  opus: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 8 },
-  sonnet: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 },
-  haiku: { input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 1 },
+  fable: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 20, cacheWrite5m: 12.5 },
+  opus: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 8, cacheWrite5m: 5 },
+  sonnet: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4, cacheWrite5m: 2.5 },
+  haiku: { input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 1, cacheWrite5m: 0.625 },
 }
 
 /** The family a model id belongs to ("claude-opus-5-5" is opus), or null for one not priced here. */
@@ -55,15 +65,18 @@ export type TokenCounts = {
   cache_creation_input_tokens: number
 }
 
-/** What a request's tokens cost at its model's rates; 0 for a model not priced here. */
-export const requestCost = (modelId: string | null | undefined, counts: TokenCounts): number => {
+/**
+ * What a request's tokens cost at its model's rates, its cache writes at the rate of the
+ * cache they went to (1-hour unless said); 0 for a model not priced here.
+ */
+export const requestCost = (modelId: string | null | undefined, counts: TokenCounts, ttl: CacheTtl = '1h'): number => {
   const rates = priceFor(modelId)
   if (rates === null) return 0
   const dollars =
     counts.input_tokens * rates.input +
     counts.output_tokens * rates.output +
     counts.cache_read_input_tokens * rates.cacheRead +
-    counts.cache_creation_input_tokens * rates.cacheWrite
+    counts.cache_creation_input_tokens * (ttl === '1h' ? rates.cacheWrite : rates.cacheWrite5m)
   return dollars / 1e6
 }
 

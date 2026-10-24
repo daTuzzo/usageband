@@ -32,7 +32,7 @@ The status part shows how much of the 5-hour and 7-day limits is used (as Claude
 - Next-message price on each model: Fable, Opus, Sonnet, Haiku
 - Tokens: sent, new (not from the cache), cache read, cache write, out
 - Prompt count, reset times, tokens in the cache
-- Subagents in their own card, by name and cost, with their own pager: paging moves only them, never the fixed figures. A name too long for its chip is cut; hover it for the whole. Runs with no task name (the engine's own work, such as compaction) show together as one "unnamed" chip
+- Subagents in their own card, by name and cost, with their own pager: paging moves only them, never the fixed figures. A name too long for its chip is cut; hover it for the whole. A subagent is named by its task description, else by the first line of its prompt (a workflow's agents). Runs with no name at all (the engine's own work, such as compaction) show greyed, by model ("Opus run"); **Collapse unnamed** puts them in one chip, and **Expand unnamed** splits them again. A subagent's cost prices its cache writes at the 5-minute rate, the cache subagents write to; SPENT is the engine's own total
 - Keep warm: a timer that keeps the prompt cache warm while you are away (see below)
 - An optional pixel mascot for the cache chip, off by default
 

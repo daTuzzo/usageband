@@ -108,7 +108,7 @@ test('the details header: keep warm button and length, timer pill, mascot drawn'
   await phone.unmount()
 })
 
-test('subagents are named from their spawn, else their record; the rest are one unnamed entry', async ($, on) => {
+test('subagents are named from spawn, record or prompt; the rest show by model, and collapse into one', async ($, on) => {
   on('clock.now', () => ({ value: Date.parse('2026-10-24T12:00:00Z') }))
   on('clock.every', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
@@ -131,6 +131,7 @@ test('subagents are named from their spawn, else their record; the rest are one 
     throw new Error('no such file')
   })
   on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a-new' }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('classic.SessionStart', () => ({}))
 
@@ -140,18 +141,62 @@ test('subagents are named from their spawn, else their record; the rest are one 
     tool_use_id: 'toolu_1', prompt: 'Build it', description: 'Build usage band variant E', subagentType: 'general-purpose',
     provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: true, fork: false,
   })
-  for (const agentId of ['a-new', 'a-old', 'a-fork']) {
+  // A workflow's agent: no description anywhere, so the first line of its prompt names it.
+  await $.turn.start({ text: '\nReview the diff for correctness bugs\nReport each one.', turnId: 't-wf', agentId: 'a-wf' })
+  for (const agentId of ['a-new', 'a-old', 'a-wf', 'a-fork1', 'a-fork2']) {
     await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId: `t-${agentId}`, reason: 'answer', agentId, usage: USED })
   }
 
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // Wide enough for all five chips on one page (six to a row).
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, bodyColumns: 200 }, surface: 'desktop' })
   await ui.drawn()
-  const card = (await svgs(ui)).find(s => s.isInteractive)
-  expect(card).toBeDefined()
-  expect(card?.source).toContain('<title>Build usage band variant E')
-  expect(card?.source).toContain('<title>Count the md files in the repo')
-  expect(card?.source).toContain('>unnamed (1)<')
-  expect(card?.source).not.toMatch(/>subagent</i)
-  expect((await ui.find({ type: 'Text', text: /3 ran/ }))?.text).toMatch(/3 ran/)
+  const card = async () => (await svgs(ui)).find(s => s.isInteractive)?.source ?? ''
+  expect(await card()).toContain('<title>Build usage band variant E\n$0.40')
+  expect(await card()).toContain('<title>Count the md files in the repo')
+  expect(await card()).toContain('<title>Review the diff for correctness bugs')
+  expect(await card()).not.toMatch(/>subagent</i)
+  expect((await ui.find({ type: 'Text', text: /5 ran/ }))?.text).toMatch(/5 ran/)
+  // The two engine runs: one chip each, by model, until collapsed into one.
+  expect((await card()).match(/>Opus run</g)?.length).toBe(2)
+  expect((await props(ui, 'usageband-unnamed'))?.label).toBe('Collapse unnamed')
+  await ui.press({ key: 'usageband-unnamed' })
+  expect(await card()).toContain('>unnamed (2)<')
+  expect(await card()).not.toContain('>Opus run<')
+  expect((await props(ui, 'usageband-unnamed'))?.label).toBe('Expand unnamed')
+  await ui.press({ key: 'usageband-unnamed' })
+  expect((await card()).match(/>Opus run</g)?.length).toBe(2)
+  await ui.unmount()
+})
+
+test("a subagent's cache writes are priced at the 5-minute rate", async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2026-10-24T12:00:00Z') }))
+  on('clock.every', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'band' } }))
+  on('store.get', (_, e) => ({ value: e.key === 'view' ? 'open' : undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('session.usage', () => ({ value: USAGE }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('agent.list', () => ({ value: [] }))
+  on('http.fetch', () => ({ value: { ok: false, status: 503, text: '' } }))
+  on('fs.read', () => ({ value: '{ "version": "0.21.0" }' }))
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a-w' }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({
+    tool_use_id: 'toolu_2', prompt: 'Write it', description: 'Write a long file', subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: true, fork: false,
+  })
+  const writes = { model: 'claude-opus-5-5', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 1_000_000 }
+  await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId: 't-w', reason: 'answer', agentId: 'a-w', usage: writes })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // 1M tokens written on Opus: $5.00 at the 5-minute rate (it was $8.00 at the 1-hour rate).
+  expect((await svgs(ui)).find(s => s.isInteractive)?.source).toContain('<title>Write a long file\n$5.00')
   await ui.unmount()
 })

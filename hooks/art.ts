@@ -144,6 +144,8 @@ export type BandView = {
   agents: AgentCost[]
   /** How many subagent runs cost anything, the unnamed ones counted one by one. */
   agentRuns: number
+  /** How many of them have no name from any source. */
+  unnamedRuns: number
   /** Whether the cache chip shows the mascot: a setting, off unless chosen. */
   mascot: boolean
 }
