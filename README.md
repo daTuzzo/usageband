@@ -43,7 +43,7 @@ The status part shows how much of the 5-hour and 7-day limits is used (as Claude
 | expand / collapse | Footer | Shows or hides the band |
 | ▴ / ▾ | Band | Opens or closes the details menu |
 | ━ | Band | Hides the band |
-| Keep warm | Details header | Starts or stops the keep-warm timer; highlighted while it runs |
+| Keep warm | Details header | Starts or stops the keep-warm timer; the pill before it shows that it runs |
 | length picker | Details header | Sets the timer's length: 4h, 8h, 12h, 24h, or custom (1 to 72 hours); starts nothing |
 | mascot | Details header | Shows or hides the mascot; tinted while it shows |
 | `/band` | Prompt | Shows or hides the band |
@@ -52,14 +52,16 @@ The status part shows how much of the 5-hour and 7-day limits is used (as Claude
 
 A cold cache makes the next message re-write the whole context at twice the input price. A warm one only reads it. On Opus, one cold send costs as much as about 40 reads, so keeping the cache warm while you step away is cheap next to coming back to a cold one.
 
-Set a length in the picker in the details header: 4h, 8h, 12h or 24h, or **custom** to type any number of hours from 1 to 72 and press Enter. The length is remembered for later sessions. Press **Keep warm** to start the timer, and press it again to stop it. Until the timer runs out, the mod sends one short line ("cache ping, reply ok") as soon as 2 minutes or less are left on the 1-hour cache (58 minutes after the last request). It checks every 10 seconds, so it has 12 chances to catch that window. While it runs, the footer shows `kw` and a pill beside the picker shows the time left and the pings sent. A new length picked while it runs takes effect from that moment. The phone app has no picker: there the button runs the length last picked.
+Set a length in the picker in the details header: 4h, 8h, 12h or 24h, or **custom** to type any number of hours from 1 to 72 and press Enter. The length is remembered for later sessions. Press **Keep warm** to start the timer, and press it again to stop it. Until the timer runs out, the mod sends one short line ("cache ping, reply ok") as soon as 2 minutes or less are left on the 1-hour cache (58 minutes after the last request). It checks every 10 seconds, so it has 12 chances to catch that window. While it runs, the footer shows `kw` and a pill before the button shows the time left and the pings sent. A new length picked while it runs takes effect from that moment. The phone app has no picker: there the button runs the length last picked.
+
+If the cache goes cold anyway (the mod did not get to ping in time, say while the app slept), the timer waits rather than stopping: a ping would only re-write the whole cache, so it sends none, and the pill shows "cache cold". Your next message warms the cache, and the pings go on.
 
 It stops on its own, and shows why, when:
 
 - the timer runs out;
 - the pings have cost as much as one cold send (past that, letting the cache go cold is cheaper: about 38 h of pings on Opus, 18 h on Sonnet);
 - a cold send would cost under $1 (small contexts are not worth keeping);
-- the 5-hour limit is over 90% used or the 7-day limit over 95%;
+- the 5-hour limit is over 90% used or the 7-day limit over 95% (a window whose reset time has passed counts as 0% used: it started over);
 - a ping wrote the cache instead of reading it (the cache had already expired, or the session is on the 5-minute cache of usage overage).
 
 It never pings while a turn is running, and pings do not count as your prompts. Check the logic: `npx -y tsx tests/keepwarm.check.ts`. Check the menu's controls on each surface: `claude plugin test`.

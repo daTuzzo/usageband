@@ -11,7 +11,7 @@ import {
 import type { AgentCost, BandView, Gauge } from './art'
 import {
   DEFAULT_HOURS, KEEP_WARM_HOURS, MAX_HOURS, MIN_HOURS, PING_TEXT,
-  keepWarmStep, parseHours, pingFoundCold, retimeKeepWarm, toggleKeepWarm,
+  keepWarmStep, parseHours, pingFoundCold, retimeKeepWarm, toggleKeepWarm, usedNow,
 } from './keepwarm'
 import { CACHE_TTL_MS, FAMILIES, PRICES, familyFor, formatUsd, nextMessageCost, requestCost } from './pricing'
 import { CHECK_EVERY_MS, LATEST_URL, MANUAL_UPDATE, UPDATE_STEPS, isNewer, versionOf } from './update'
@@ -30,16 +30,16 @@ const NO_COUNTS: UsagebandCounters = { prompts: 0, input: 0, output: 0, cacheRea
 /** The menu's card: a shade darker than the band, its border #ffffff14 laid over that shade. */
 const CARD_FILL = '#181713'
 const CARD_BORDER = '#2a2925'
-/** The subagents card inside the menu: a lighter shade and its own border, so the part that pages stands apart. */
+/** The subagents section inside the menu: a lighter shade, so the part that pages stands apart. */
 const AGENTS_FILL = '#211f1a'
-const AGENTS_BORDER = '#3a372e'
 /** Six pixels of air between the menu's card and the band. */
-const AIR_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="${OPEN_PX.air}" viewBox="0 0 1 ${OPEN_PX.air}"></svg>`
+const AIR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="2" viewBox="0 0 1 2"></svg>'
 /**
  * The header's controls, in CSS pixels, to tell whether they fit one line: the label or the
- * two tabs, Keep warm, the length picker, the mascot, and the gaps and padding around them.
+ * tabs, the pill, Keep warm, the length picker, the mascot, and the gaps and padding around
+ * them. `narrow`: the least menu width for the three-tab header with the short pill on one line.
  */
-const HEAD_W = { label: 60, tabs2: 190, tabs3: 250, pill: 120, keepWarm: 80, picker: 56, mascot: 22, gaps: 60 } as const
+const HEAD_W = { label: 60, tabs2: 190, tabs3: 250, pill: 120, keepWarm: 80, picker: 56, mascot: 22, gaps: 60, narrow: 470 } as const
 /** The tabs' labels: "Usage" holds the tokens, the prompts and the reset times. */
 const TAB_LABELS: Record<UsagebandMenuTab, string> = { figures: 'Figures', tokens: 'Usage', cache: 'Cache', agents: 'Subagents' }
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -296,17 +296,21 @@ const settleTurn = async ($: EngineInterface, turnMs: number, model: string | nu
 
 const clockText = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 
-/** One limit as the band draws it: share left, time to its reset, and the reset's clock time (with the day if past 24 h). */
+/**
+ * One limit as the band draws it: share used, time to its reset, and the reset's clock time
+ * (with the day if past 24 h). A window whose reset has passed has started over: 0% used,
+ * its next reset unknown until a response brings fresh figures.
+ */
 const gaugeFor = (all: UsagebandLimit[], kind: string, nowMs: number): Gauge | null => {
   const lim = all.find(x => x.kind === kind)
   if (lim === undefined) return null
   const resetAt = lim.resetsAt ? Date.parse(lim.resetsAt) : Number.NaN
   const untilMs = resetAt - nowMs
   const when = new Date(resetAt)
-  const known = !Number.isNaN(resetAt)
+  const known = !Number.isNaN(resetAt) && untilMs > 0
   return {
-    used: Math.min(100, Math.max(0, Math.round(lim.usedPct))),
-    reset: !known ? '' : untilMs <= 0 ? 'now' : shortSpan(untilMs),
+    used: Math.min(100, Math.max(0, Math.round(usedNow(lim, nowMs)))),
+    reset: !known ? '' : shortSpan(untilMs),
     at: !known ? '' : untilMs < 86_400_000 ? clockText(when) : `${WEEKDAYS[when.getDay()] ?? ''} ${clockText(when)}`,
   }
 }
@@ -745,9 +749,10 @@ export const register: Register = on => {
     const warmLeftMs = kw !== null && kw.until > nowMs ? kw.until - nowMs : 0
     const ask = await read($, askHours)
     const hours = await read($, warmHours)
-    const timer =
+    // The timer's pill: full, or (in a narrow header) the time alone.
+    const timerFor = (short: boolean) =>
       warmLeftMs > 0 && kw
-        ? timerPillSvg({ leftMs: warmLeftMs, totalMs: kw.hours * 3_600_000, pings: kw.pings })
+        ? timerPillSvg({ leftMs: warmLeftMs, totalMs: kw.hours * 3_600_000, pings: kw.pings, cold: v.cache?.mode === 'cold', short })
         : kw?.note
           ? timerPillSvg({ note: kw.note })
           : null
@@ -828,29 +833,41 @@ export const register: Register = on => {
                 ? 'figures'
                 : (tabs[0] ?? null)
       const figures = m === null || tab === 'agents' ? null : tab === 'tokens' || tab === 'cache' ? menuSvg(v, menuW, tab) : m
+      // Tabs are plain text Buttons, so they look the same in every build of the app: the one
+      // on show at full strength, the others dim.
+      // Three tabs mean a narrow pane: the pill shows the time alone and the subagents' tab is
+      // "Agents", without its cost. Where even that header would wrap, the pill goes and the
+      // time left rides on the Keep warm button, so the header keeps to one line.
+      const narrow = tabs.length === 3
+      const tiny = narrow && menuW < HEAD_W.narrow
+      const timer = tiny ? null : timerFor(narrow)
+      const keepWarmLabel = tiny && warmLeftMs > 0 ? `Keep warm ${shortSpan(warmLeftMs)}` : 'Keep warm'
       const tabButton = (which: UsagebandMenuTab) => (
         <Button
           key={`usageband-tab-${which}`}
-          label={which === 'agents' ? `${TAB_LABELS.agents} ${formatUsd(subTotal)}` : TAB_LABELS[which]}
-          {...(tab === which ? {} : { plain: true as const })}
+          plain
+          label={which === 'agents' ? (narrow ? 'Agents' : `${TAB_LABELS.agents} ${formatUsd(subTotal)}`) : TAB_LABELS[which]}
+          {...(tab === which ? {} : { dimColor: true })}
           onPress={() => void update($, menuTab, () => which)}
         />
       )
       return (
         <Box flexDirection="column">
           {m ? (
-            <Box key="menu" flexDirection="column" backgroundColor={CARD_FILL} borderStyle="round" borderColor={CARD_BORDER}>
-              {/* A little taller than a text row, its controls apart; in a narrow pane they wrap, never clip.
-                  When the menu cannot show whole, its label gives way to the two tabs (the one on show filled). */}
+            <Box key="menu" flexDirection="column" backgroundColor={CARD_FILL} borderStyle="round" borderColor={CARD_BORDER} paddingY={0}>
+              {/* Two groups: the label (or the tabs) at the left, the controls at the right. In a
+                  narrow pane the controls wrap as one group, still aligned right, never clipped. */}
               <Box key="head" flexDirection="row" flexWrap="wrap" alignItems="center" paddingX={1} paddingY="xs" columnGap="sm" rowGap="xs">
-                {tabs.length > 0 ? (
-                  tabs.map(tabButton)
-                ) : (
-                  <Text color={PAL.muted} size="caption" weight="semibold">
-                    DETAILS
-                  </Text>
-                )}
-                <Box key="space" flexGrow={1} />
+                <Box key="head-left" flexDirection="row" alignItems="center" columnGap="xs" flexShrink={0}>
+                  {tabs.length > 0 ? (
+                    tabs.map(tabButton)
+                  ) : (
+                    <Text color={PAL.muted} size="caption" weight="semibold">
+                      DETAILS
+                    </Text>
+                  )}
+                </Box>
+                <Box key="head-right" flexDirection="row" flexWrap="wrap" flexGrow={1} justifyContent="flex-end" alignItems="center" columnGap="sm" rowGap="xs">
                 {/* Updates: a button while a newer version waits on GitHub; the outcome stays beside it. */}
                 {rel?.note ? (
                   <Text key="update-note" color={PAL.muted} size="caption">{rel.note}</Text>
@@ -865,14 +882,10 @@ export const register: Register = on => {
                     <Svg source={timer.source} alt={timer.alt} width={timer.w} height={timer.h} />
                   </Box>
                 ) : null}
-                {/* Keep-warm: the button starts and stops the timer (the app's primary look while it
-                    runs); the picker beside it only sets the length. Custom opens an hours field. */}
-                <Button
-                  key="usageband-keepwarm"
-                  label="Keep warm"
-                  {...(warmLeftMs > 0 ? { variant: 'primary' as const } : {})}
-                  onPress={() => void flipKeepWarm($)}
-                />
+                {/* Keep-warm: the button starts and stops the timer; the pill before it shows that it
+                    runs. The button keeps one look (the app's primary variant differs between builds).
+                    The picker beside it only sets the length. Custom opens an hours field. */}
+                <Button key="usageband-keepwarm" label={keepWarmLabel} onPress={() => void flipKeepWarm($)} />
                 {Select ? (
                   <Select
                     key="usageband-warm-hours"
@@ -895,10 +908,12 @@ export const register: Register = on => {
                     <Button key="usageband-mascot" plain label={MASCOT_HIT} onPress={() => void flipMascot($)} />
                   </Box>
                 </Box>
+                </Box>
               </Box>
               {figures ? image('menu-svg', figures.source, figures.alt) : null}
               {a && (tab === null || tab === 'agents') ? (
-                <Box key="agents" flexDirection="column" backgroundColor={AGENTS_FILL} borderStyle="round" borderColor={AGENTS_BORDER} marginX={1} marginBottom="xs">
+                // The subagents: their own fill sets them apart; no border, padding or margin, so they take no more height than their lines.
+                <Box key="agents" flexDirection="column" backgroundColor={AGENTS_FILL}>
                   <Box key="agents-head" flexDirection="row" alignItems="center" paddingX={1}>
                     <Text color={PAL.muted} size="caption" weight="semibold">
                       SUBAGENTS

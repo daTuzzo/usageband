@@ -385,8 +385,8 @@ type Chip = { min: number; draw: (x: number, y: number, w: number) => string; ti
 const totalOf = (v: BandView): number => v.input + v.output + v.cacheRead + v.cacheWrite
 const valueCy = (y: number): number => y + CHIP_VALUE - (VS * CAP) / 2
 
-const chipRect = (x: number, y: number, w: number, tint?: string): string =>
-  `<rect x="${n2(x)}" y="${n2(y)}" width="${n2(w)}" height="${CHIP_H}" rx="6" fill="${tint ?? CHIP_FILL}" fill-opacity="${tint ? 0.14 : CHIP_ALPHA}"/>`
+const chipRect = (x: number, y: number, w: number, tint?: string, h = CHIP_H): string =>
+  `<rect x="${n2(x)}" y="${n2(y)}" width="${n2(w)}" height="${h}" rx="6" fill="${tint ?? CHIP_FILL}" fill-opacity="${tint ? 0.14 : CHIP_ALPHA}"/>`
 
 /** A label's width with 15% to spare, so a label never meets what sits beside it. */
 const MARGIN = 1.15
@@ -481,12 +481,12 @@ const cacheChip = (v: BandView, fit: Fit): Chip => {
   }
 }
 
-/** A row of chips, `w` wide, equal widths, `gap` px apart. */
-const chipRow = (chips: Chip[], x: number, y: number, w: number, gap = CHIP_GAP): string => {
+/** A row of chips, `w` wide, equal widths, `gap` px apart, `h` px tall. */
+const chipRow = (chips: Chip[], x: number, y: number, w: number, gap = CHIP_GAP, h = CHIP_H): string => {
   const cw = (w - (chips.length - 1) * gap) / chips.length
   return chips
     .map((c, i) => {
-      const shapes = chipRect(x + i * (cw + gap), y, cw, c.tint) + c.draw(x + i * (cw + gap), y, cw)
+      const shapes = chipRect(x + i * (cw + gap), y, cw, c.tint, h) + c.draw(x + i * (cw + gap), y, cw)
       return c.title ? `<g><title>${esc(c.title)}</title>${shapes}</g>` : shapes
     })
     .join('')
@@ -664,10 +664,13 @@ const statsPlan = (v: BandView, W: number, part: FiguresPart): { cols: number; r
   return { cols, rows: toRows(fixed, cols) }
 }
 
-/** The least width a subagent chip takes, so a name can be read (about 26 characters). */
+/** The least width a subagent chip takes, so a name can be read (about 22 characters beside its cost). */
 const AGENT_MIN = 190
 /** A subagent's name: sentence case, a little under a value, so more of it fits than in caps. */
 const NAME_SIZE = 12
+/** A subagent chip is one line, its name at the left and its cost at the right: shorter than a figure's chip. */
+const AGENT_H = 24
+const COST_SIZE = 13
 
 /** The subagents, by cost, one row of them per page: as many to a row as the width holds, up to six. */
 const agentsPlan = (v: BandView, W: number, page: number): { cols: number; row: Chip[]; pages: number; page: number } => {
@@ -676,17 +679,23 @@ const agentsPlan = (v: BandView, W: number, page: number): { cols: number; row: 
   const agents = [...v.agents].sort((a, b) => b.usd - a.usd)
   const pages = Math.max(1, Math.ceil(agents.length / cols))
   const p = Math.max(0, Math.min(pages - 1, page))
-  // The name is cut to the chip with an ellipsis; the whole of it shows on hover.
-  const row = agents.slice(p * cols, p * cols + cols).map(
-    (g): Chip => ({
+  // One line: the name at the left, cut with an ellipsis (the whole of it shows on hover),
+  // the cost at the right.
+  const row = agents.slice(p * cols, p * cols + cols).map((g): Chip => {
+    const cost: Span[] = [
+      { s: '$', size: COST_SIZE, weight: 600, fill: PAL.muted, ls: 0, dx: 0 },
+      { s: g.usd.toFixed(2), size: COST_SIZE, weight: 600, fill: PAL.ink, ls: 0, dx: 0 },
+    ]
+    const base = AGENT_H / 2 + (COST_SIZE * CAP) / 2
+    return {
       min: 0,
       title: `${g.full}\n$${g.usd.toFixed(2)}`,
       draw: (x, y, w) =>
-        line(x + CHIP_PX, y + CHIP_LABEL, [
-          { s: fit(g.name, NAME_SIZE, 500, w - 2 * CHIP_PX), size: NAME_SIZE, weight: 500, fill: g.dim ? PAL.muted : PAL.ink, ls: 0, dx: 0 },
-        ]) + line(x + CHIP_PX, y + CHIP_VALUE, sMoney(g.usd, PAL.ink)),
-    }),
-  )
+        line(x + CHIP_PX, y + base, [
+          { s: fit(g.name, NAME_SIZE, 500, w - 2 * CHIP_PX - spansW(cost) - 8), size: NAME_SIZE, weight: 500, fill: g.dim ? PAL.muted : PAL.ink, ls: 0, dx: 0 },
+        ]) + line(x + w - CHIP_PX, y + base, cost, 'end'),
+    }
+  })
   return { cols, row, pages, page: p }
 }
 
@@ -721,38 +730,39 @@ export const agentsSvg = (
 ): { source: string; w: number; h: number; alt: string; page: number; pages: number } => {
   const W = Math.max(120, Math.floor(widthPx))
   const plan = agentsPlan(v, W, page)
-  const H = rowsH(1)
+  const H = 2 * M_PAD + AGENT_H
   // Chips keep one width on every page: a last page of one chip does not stretch it across the card.
   const cw = (W - 2 * M_PAD - (plan.cols - 1) * CHIP_GAP) / plan.cols
-  const body = chipRow(plan.row, M_PAD, M_PAD, plan.row.length * cw + (plan.row.length - 1) * CHIP_GAP)
+  const body = chipRow(plan.row, M_PAD, M_PAD, plan.row.length * cw + (plan.row.length - 1) * CHIP_GAP, CHIP_GAP, AGENT_H)
   const alt = plan.row.length === 0 ? 'No subagents yet.' : `Subagents, page ${plan.page + 1} of ${plan.pages}.`
   return { source: svgDoc(W, H, body), w: W, h: H, alt, page: plan.page, pages: plan.pages }
 }
 
 // ---------- The band's slot on desktop ----------
 /**
- * The desktop app caps the band's area at `calc(11lh + 40px)` (its maxRows is 12) and
- * scrolls a taller tree; read from the app's own code, 2026-10-24. In the band a line is
- * the app's small body leading, 17 to 20 px: the smaller is assumed, so what fits here fits there.
+ * The desktop app caps the band's area at `calc(11lh + 40px)` (its maxRows is 12) and pads
+ * the band (40px - 1lh) at the top and the bottom, so the band shows maxRows lines and
+ * scrolls a taller tree (the app's own code, 2026-10-24). MEASURED in the running app: a
+ * 271 px open view scrolled by 27 px, so about 244 px show, 12 lines at 20 px.
  */
-const LINE_PX = 17
-const SLOT_EXTRA_PX = 40
+const LINE_PX = 20
 /** The band's slot height in CSS pixels for the rows the engine gives it. */
-export const slotPx = (maxRows: number): number => (Math.max(2, maxRows) - 1) * LINE_PX + SLOT_EXTRA_PX
+export const slotPx = (maxRows: number): number => Math.max(2, maxRows) * LINE_PX
 
 /**
- * The open view's native parts, in CSS pixels (the app's small sizes): the gap above the
- * band, the menu card's border, its header row (20 px controls and a small padding), a
- * second header line when the controls wrap, and the subagents card's border, header and gap.
+ * The open view's native parts, in CSS pixels, MEASURED from screenshots of the running app
+ * (2026-10-24) and rounded up: the room between the menu card and the band, the menu card's
+ * border (its vertical padding is set to 0), its header row (26 px controls), a second header
+ * line when the controls wrap, and the subagents' header line.
  */
-export const OPEN_PX = { air: 2, card: 2, head: 30, headWrap: 24, agentsCard: 28 } as const
+export const OPEN_PX = { gap: 15, card: 4, head: 34, headWrap: 30, agentsHead: 24 } as const
 
 /**
  * Whether the whole open view (band, menu header, fixed figures, subagents card) fits the
  * slot. When it does not, the menu shows its figures and its subagents one at a time.
  */
 export const openFits = (p: { slot: number; band: number; headLines: number; stats: number; agents: number }): boolean =>
-  p.band + OPEN_PX.air + OPEN_PX.card + OPEN_PX.head + (p.headLines - 1) * OPEN_PX.headWrap + p.stats + (p.agents > 0 ? OPEN_PX.agentsCard + p.agents : 0) <=
+  p.band + OPEN_PX.gap + OPEN_PX.card + OPEN_PX.head + (p.headLines - 1) * OPEN_PX.headWrap + p.stats + (p.agents > 0 ? OPEN_PX.agentsHead + p.agents : 0) <=
   p.slot
 
 // ---------- The details header's two drawings ----------
@@ -778,11 +788,12 @@ const TS = 12
 
 /**
  * The keep-warm timer as a pill in the band's style. Running: a ring of the time left
- * of the length picked, the time left in the warm colour, and the pings sent. Stopped by
- * a guard: a cold dot, "stopped" and why.
+ * of the length picked, the time left in the warm colour, and the pings sent; while the
+ * cache is cold, "cache cold" in its colour instead of the pings (the timer waits for the
+ * next message). Stopped by a guard: a cold dot, "stopped" and why.
  */
 export const timerPillSvg = (
-  t: { leftMs: number; totalMs: number; pings: number } | { note: string },
+  t: { leftMs: number; totalMs: number; pings: number; cold?: boolean; short?: boolean } | { note: string },
 ): { source: string; w: number; h: number; alt: string } => {
   const cy = TIMER_H / 2
   const base = cy + (TS * CAP) / 2
@@ -793,15 +804,23 @@ export const timerPillSvg = (
           { s: 'stopped', size: TS, weight: 600, fill: PAL.cold, ls: 0, dx: 0 },
           { s: t.note, size: TS, weight: 500, fill: PAL.muted, ls: 0, dx: 5 },
         ]
-      : [
+      : t.short
+        ? // A narrow header: the time alone, in the cold colour while the cache is cold.
+          [{ s: shortSpan(t.leftMs), size: TS, weight: 600, fill: t.cold ? PAL.cold : PAL.warm, ls: 0, dx: 0 }]
+        : [
           { s: shortSpan(t.leftMs), size: TS, weight: 600, fill: PAL.warm, ls: 0, dx: 0 },
           { s: 'left', size: TS, weight: 500, fill: PAL.muted, ls: 0, dx: 4 },
-          ...(t.pings > 0
+          ...(t.cold
             ? [
                 { s: '·', size: TS, weight: 500 as const, fill: PAL.muted, ls: 0, dx: 5 },
-                { s: `${t.pings} ping${t.pings === 1 ? '' : 's'}`, size: TS, weight: 500 as const, fill: PAL.muted, ls: 0, dx: 5 },
+                { s: 'cache cold', size: TS, weight: 600 as const, fill: PAL.cold, ls: 0, dx: 5 },
               ]
-            : []),
+            : t.pings > 0
+              ? [
+                  { s: '·', size: TS, weight: 500 as const, fill: PAL.muted, ls: 0, dx: 5 },
+                  { s: `${t.pings} ping${t.pings === 1 ? '' : 's'}`, size: TS, weight: 500 as const, fill: PAL.muted, ls: 0, dx: 5 },
+                ]
+              : []),
         ]
   const W = Math.ceil(x0 + spansW(spans) + 10)
   const R = 5
@@ -818,6 +837,11 @@ export const timerPillSvg = (
     `<rect x="0.5" y="0.5" width="${W - 1}" height="${TIMER_H - 1}" rx="${(TIMER_H - 1) / 2}" fill="${CHIP_FILL}" fill-opacity="0.06" stroke="${CHIP_FILL}" stroke-opacity="0.08"/>` +
     mark +
     line(x0, base, spans)
-  const alt = 'note' in t ? `Keep warm stopped: ${t.note}.` : `Keep warm: ${shortSpan(t.leftMs)} left, ${t.pings} pings sent.`
+  const alt =
+    'note' in t
+      ? `Keep warm stopped: ${t.note}.`
+      : t.cold
+        ? `Keep warm: ${shortSpan(t.leftMs)} left, waiting: the cache is cold until the next message.`
+        : `Keep warm: ${shortSpan(t.leftMs)} left, ${t.pings} pings sent.`
   return { source: svgDoc(W, TIMER_H, body), w: W, h: TIMER_H, alt }
 }
