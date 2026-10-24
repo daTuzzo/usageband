@@ -7,7 +7,10 @@ import {
   agentsSvg, bandSvg, fmtTok, menuPages, menuSvg, shortSpan, svgPx, tone,
 } from './art'
 import type { BandView, Gauge } from './art'
-import { PING_TEXT, keepWarmStep, nextKeepWarm, pingFoundCold } from './keepwarm'
+import {
+  KEEP_WARM_HOURS, MAX_HOURS, MIN_HOURS, PING_TEXT,
+  keepWarmStep, nextKeepWarm, offKeepWarm, parseHours, pingFoundCold, startKeepWarm,
+} from './keepwarm'
 import { CACHE_TTL_MS, FAMILIES, PRICES, familyFor, formatUsd, nextMessageCost, requestCost } from './pricing'
 import { CHECK_EVERY_MS, LATEST_URL, MANUAL_UPDATE, UPDATE_STEPS, isNewer, versionOf } from './update'
 import type { CacheState, Family } from './pricing'
@@ -45,6 +48,11 @@ const mascot = atom({ plugin: 'usageband', key: 'mascot' } as const, false)
 /** The $.store key for the mascot setting; off unless chosen. */
 const STORED_MASCOT = 'showMascot'
 const keepWarm = atom({ plugin: 'usageband', key: 'keepWarm' } as const, null as KeepWarm | null)
+const askHours = atom({ plugin: 'usageband', key: 'askHours' } as const, null as string | null)
+/** The keep-warm picker's option that opens the hours field. */
+const CUSTOM = 'custom'
+/** A bearded face: the mascot setting's button, highlighted while the mascot shows. */
+const MASCOT_GLYPH = '\u{1F9D4}'
 const release = atom({ plugin: 'usageband', key: 'release' } as const, null as UsagebandRelease | null)
 
 /** The newer version waiting on GitHub, or null when this install is current or the check has not answered. */
@@ -93,11 +101,46 @@ const runUpdate = async ($: EngineInterface): Promise<void> => {
 /** Whether a main-thread turn is running; set by turn.step, cleared by turn.complete. */
 let mainTurnOpen = false
 
-/** One press of the keep-warm button: off, then 2 h, 4 h, 8 h, then off again. */
+/** One press of the keep-warm button where the picker cannot draw: the next length, then off. */
 const stepKeepWarm = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   await update($, keepWarm, kw => nextKeepWarm(kw, now))
 }
+
+/** A pick from the keep-warm picker: off, a length in hours, or custom, which opens the hours field. */
+const pickKeepWarm = async ($: EngineInterface, value: string): Promise<void> => {
+  if (value === CUSTOM) {
+    await update($, askHours, () => '')
+    return
+  }
+  await update($, askHours, () => null)
+  const hours = Number(value)
+  if (!(hours > 0)) {
+    await update($, keepWarm, offKeepWarm)
+    return
+  }
+  const now = await $.clock.now()
+  await update($, keepWarm, kw => startKeepWarm(kw, hours, now))
+}
+
+/** Enter in the hours field: a length in range starts the timer and closes the field; else the range shows beside it. */
+const typeHours = async ($: EngineInterface, text: string): Promise<void> => {
+  const hours = parseHours(text)
+  if (hours === null) {
+    await update($, askHours, () => `${MIN_HOURS} to ${MAX_HOURS} hours`)
+    return
+  }
+  await pickKeepWarm($, String(hours))
+}
+
+/** The picker's lengths: the presets, plus a typed length while it runs, in order. */
+const keepWarmOptions = (running: number | null): { value: string; label: string }[] => [
+  { value: 'off', label: 'off' },
+  ...[...new Set(running === null ? KEEP_WARM_HOURS : [...KEEP_WARM_HOURS, running])]
+    .sort((a, b) => a - b)
+    .map(h => ({ value: String(h), label: `${h}h` })),
+  { value: CUSTOM, label: 'custom' },
+]
 
 const stopKeepWarm = async ($: EngineInterface, note: string): Promise<void> => {
   await update($, keepWarm, kw => (kw === null ? null : { ...kw, until: 0, pendingAt: 0, note }))
@@ -548,6 +591,7 @@ export const register: Register = on => {
     const kw = await read($, keepWarm)
     const nowMs = await $.clock.now()
     const warmLeftMs = kw !== null && kw.until > nowMs ? kw.until - nowMs : 0
+    const ask = await read($, askHours)
     const rel = await read($, release)
     const newer = pendingUpdate(rel)
 
@@ -563,6 +607,10 @@ export const register: Register = on => {
     // An Svg gets no width or height: it takes its markup's width up to the slot, and its
     // Box may shrink below that, so the image scales down and the controls never clip.
     const Svg = ev.surface !== 'terminal' && 'Svg' in kit ? kit.Svg : null
+    // The phone app draws no Select or Input (its kit lists them, and draws nothing): there
+    // keep-warm falls back to a button that steps. Decide by the surface, as for Svg.
+    const Select = ev.surface !== 'mobile' && 'Select' in kit ? kit.Select : null
+    const Input = ev.surface !== 'mobile' && 'Input' in kit ? kit.Input : null
     if (Svg) {
       const image = (key: string, source: string, alt: string, grow = 1) => (
         <Box key={key} flexGrow={grow} flexShrink={1} minWidth={0} overflow="hidden">
@@ -590,31 +638,57 @@ export const register: Register = on => {
         <Box flexDirection="column">
           {m ? (
             <Box key="menu" flexDirection="column" backgroundColor={CARD_FILL} borderStyle="round" borderColor={CARD_BORDER}>
-              <Box key="head" flexDirection="row" alignItems="center" paddingX={1}>
+              {/* A little taller than a text row, its controls apart; in a narrow pane they wrap, never clip. */}
+              <Box key="head" flexDirection="row" flexWrap="wrap" alignItems="center" paddingX={1} paddingY="xs" columnGap="sm" rowGap="xs">
                 <Text color={PAL.muted} size="caption" weight="semibold">
                   DETAILS
                 </Text>
                 <Box key="space" flexGrow={1} />
                 {/* Updates: a button while a newer version waits on GitHub; the outcome stays beside it. */}
                 {rel?.note ? (
-                  <Text key="update-note" color={PAL.muted} size="caption">{`${rel.note} `}</Text>
+                  <Text key="update-note" color={PAL.muted} size="caption">{rel.note}</Text>
                 ) : null}
                 {newer !== null && !rel?.note?.startsWith('updated') ? (
                   <Button key="usageband-update" label={`update to ${newer}`} onPress={() => void runUpdate($)} />
                 ) : null}
-                {/* Keep-warm: each press steps the timer (2 h, 4 h, 8 h, off); the label counts down.
-                    After a guard stops it, the reason shows beside it until the next press. */}
-                {warmLeftMs === 0 && kw?.note ? (
-                  <Text key="kw-note" color={PAL.muted} size="caption">{`stopped: ${kw.note} `}</Text>
+                {/* Keep-warm: a picker of lengths (off, 4h to 24h, custom), the time left beside it.
+                    Custom opens an hours field; after a guard stops the timer, the reason shows instead. */}
+                {Select ? (
+                  <Select
+                    key="usageband-keepwarm"
+                    label="keep warm"
+                    options={keepWarmOptions(warmLeftMs > 0 && kw ? kw.hours : null)}
+                    value={ask !== null ? CUSTOM : warmLeftMs > 0 && kw ? String(kw.hours) : 'off'}
+                    onSelect={value => void pickKeepWarm($, value)}
+                  />
+                ) : (
+                  <Button
+                    key="usageband-keepwarm"
+                    plain
+                    label={warmLeftMs > 0 && kw ? `keep warm ${kw.hours}h` : 'keep warm off'}
+                    onPress={() => void stepKeepWarm($)}
+                  />
+                )}
+                {ask !== null && Input ? (
+                  <Input key="usageband-hours" placeholder="hours" submitLabel="start" autoFocus onSubmit={text => void typeHours($, text)} />
                 ) : null}
+                {ask ? (
+                  <Text key="hours-hint" color={PAL.muted} size="caption">{ask}</Text>
+                ) : null}
+                {warmLeftMs > 0 && kw ? (
+                  <Text key="kw-left" color={PAL.muted} size="caption">
+                    {`${shortSpan(warmLeftMs)} left${kw.pings > 0 ? ` · ${kw.pings} ping${kw.pings === 1 ? '' : 's'}` : ''}`}
+                  </Text>
+                ) : kw?.note ? (
+                  <Text key="kw-note" color={PAL.muted} size="caption">{`stopped: ${kw.note}`}</Text>
+                ) : null}
+                {/* The mascot setting: a bearded face, highlighted while the mascot shows, dim while it does not. */}
                 <Button
-                  key="usageband-keepwarm"
-                  plain
-                  label={warmLeftMs > 0 ? `keep warm ${shortSpan(warmLeftMs)}${kw && kw.pings > 0 ? ` (${kw.pings})` : ''}` : 'keep warm off'}
-                  onPress={() => void stepKeepWarm($)}
+                  key="usageband-mascot"
+                  label={MASCOT_GLYPH}
+                  {...(v.mascot ? { variant: 'primary' as const } : { dimColor: true })}
+                  onPress={() => void flipMascot($)}
                 />
-                {/* The mascot setting: part of the header row. */}
-                <Button key="usageband-mascot" plain label={v.mascot ? 'mascot on' : 'mascot off'} onPress={() => void flipMascot($)} />
               </Box>
               {image('menu-svg', m.source, m.alt)}
               {a ? (
