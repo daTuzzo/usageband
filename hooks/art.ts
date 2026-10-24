@@ -117,8 +117,11 @@ const esc = (s: string): string =>
 export type Gauge = { used: number; reset: string; at: string }
 /** What the next message costs on one model family. */
 export type Price = { id: string; name: string; usd: number; isMine: boolean }
-/** One subagent of this session and what its turns cost. */
-export type AgentCost = { name: string; usd: number }
+/**
+ * One subagent of this session (or the unnamed runs, as one), what its turns cost, and the
+ * text its hover shows. `dim` draws the name in the label grey: the unnamed entry.
+ */
+export type AgentCost = { name: string; usd: number; full: string; dim?: boolean }
 
 export type BandView = {
   h5: Gauge | null
@@ -139,6 +142,8 @@ export type BandView = {
   cacheRead: number
   cacheWrite: number
   agents: AgentCost[]
+  /** How many subagent runs cost anything, the unnamed ones counted one by one. */
+  agentRuns: number
   /** Whether the cache chip shows the mascot: a setting, off unless chosen. */
   mascot: boolean
 }
@@ -369,8 +374,11 @@ const MIN_DOTS = 4
 const MAX_DOTS = 20
 const DOTS_MIN_W = (MIN_DOTS - 1) * PITCH + 2 * DOT_R
 
-/** A chip: a label line and a value line, drawn into a box `w` wide. `min` is the least width it reads in. */
-type Chip = { min: number; draw: (x: number, y: number, w: number) => string; tint?: string }
+/**
+ * A chip: a label line and a value line, drawn into a box `w` wide. `min` is the least
+ * width it reads in. `title` is shown on hover where the Svg is drawn interactive.
+ */
+type Chip = { min: number; draw: (x: number, y: number, w: number) => string; tint?: string; title?: string }
 
 const totalOf = (v: BandView): number => v.input + v.output + v.cacheRead + v.cacheWrite
 const valueCy = (y: number): number => y + CHIP_VALUE - (VS * CAP) / 2
@@ -474,7 +482,12 @@ const cacheChip = (v: BandView, fit: Fit): Chip => {
 /** A row of chips, `w` wide, equal widths, `gap` px apart. */
 const chipRow = (chips: Chip[], x: number, y: number, w: number, gap = CHIP_GAP): string => {
   const cw = (w - (chips.length - 1) * gap) / chips.length
-  return chips.map((c, i) => chipRect(x + i * (cw + gap), y, cw, c.tint) + c.draw(x + i * (cw + gap), y, cw)).join('')
+  return chips
+    .map((c, i) => {
+      const shapes = chipRect(x + i * (cw + gap), y, cw, c.tint) + c.draw(x + i * (cw + gap), y, cw)
+      return c.title ? `<g><title>${esc(c.title)}</title>${shapes}</g>` : shapes
+    })
+    .join('')
 }
 
 // ---------- The band: six chips ----------
@@ -641,8 +654,10 @@ const statsPlan = (v: BandView, W: number): { cols: number; rows: Chip[][] } => 
   return { cols, rows: toRows(fixed, cols) }
 }
 
-/** The least width a subagent chip takes, so a name can be read. */
-const AGENT_MIN = 150
+/** The least width a subagent chip takes, so a name can be read (about 26 characters). */
+const AGENT_MIN = 190
+/** A subagent's name: sentence case, a little under a value, so more of it fits than in caps. */
+const NAME_SIZE = 12
 
 /** The subagents, by cost, one row of them per page: as many to a row as the width holds, up to six. */
 const agentsPlan = (v: BandView, W: number, page: number): { cols: number; row: Chip[]; pages: number; page: number } => {
@@ -651,12 +666,15 @@ const agentsPlan = (v: BandView, W: number, page: number): { cols: number; row: 
   const agents = [...v.agents].sort((a, b) => b.usd - a.usd)
   const pages = Math.max(1, Math.ceil(agents.length / cols))
   const p = Math.max(0, Math.min(pages - 1, page))
+  // The name is cut to the chip with an ellipsis; the whole of it shows on hover.
   const row = agents.slice(p * cols, p * cols + cols).map(
     (g): Chip => ({
       min: 0,
+      title: `${g.full}\n$${g.usd.toFixed(2)}`,
       draw: (x, y, w) =>
-        line(x + CHIP_PX, y + CHIP_LABEL, [sLabel(fit(g.name.toUpperCase(), LS, 500, (w - 2 * CHIP_PX) / MARGIN - g.name.length * TRACK))]) +
-        line(x + CHIP_PX, y + CHIP_VALUE, sMoney(g.usd, PAL.ink)),
+        line(x + CHIP_PX, y + CHIP_LABEL, [
+          { s: fit(g.name, NAME_SIZE, 500, w - 2 * CHIP_PX), size: NAME_SIZE, weight: 500, fill: g.dim ? PAL.muted : PAL.ink, ls: 0, dx: 0 },
+        ]) + line(x + CHIP_PX, y + CHIP_VALUE, sMoney(g.usd, PAL.ink)),
     }),
   )
   return { cols, row, pages, page: p }
@@ -692,7 +710,76 @@ export const agentsSvg = (
   const W = Math.max(120, Math.floor(widthPx))
   const plan = agentsPlan(v, W, page)
   const H = rowsH(1)
-  const body = chipRow(plan.row, M_PAD, M_PAD, W - 2 * M_PAD)
+  // Chips keep one width on every page: a last page of one chip does not stretch it across the card.
+  const cw = (W - 2 * M_PAD - (plan.cols - 1) * CHIP_GAP) / plan.cols
+  const body = chipRow(plan.row, M_PAD, M_PAD, plan.row.length * cw + (plan.row.length - 1) * CHIP_GAP)
   const alt = plan.row.length === 0 ? 'No subagents yet.' : `Subagents, page ${plan.page + 1} of ${plan.pages}.`
   return { source: svgDoc(W, H, body), w: W, h: H, alt, page: plan.page, pages: plan.pages }
+}
+
+// ---------- The details header's two drawings ----------
+/** The mascot button's side, in CSS pixels, as tall as the app's controls: the portrait's 10 cells at 2 px, 4 px around. */
+export const MASCOT_ICON = 28
+
+/**
+ * The mascot setting's face: the pixel portrait on a square, tinted in the cache's warm
+ * colour while on, outlined and greyed while off. A transparent Button lies over it.
+ */
+export const mascotIconSvg = (on: boolean): { source: string; w: number; h: number; alt: string } => {
+  const S = MASCOT_ICON
+  const square = on
+    ? `<rect x="0.5" y="0.5" width="${S - 1}" height="${S - 1}" rx="6" fill="${PAL.warm}" fill-opacity="0.22" stroke="${PAL.warm}" stroke-opacity="0.85"/>`
+    : `<rect x="0.5" y="0.5" width="${S - 1}" height="${S - 1}" rx="6" fill="${CHIP_FILL}" fill-opacity="0.04" stroke="${PAL.track}"/>`
+  const face = `<g transform="translate(4 4)" shape-rendering="crispEdges">${portrait(2, on ? hex => hex : hex => blend(hex, PAL.muted, 0.45))}</g>`
+  return { source: svgDoc(S, S, square + face), w: S, h: S, alt: on ? 'Mascot on' : 'Mascot off' }
+}
+
+/** The keep-warm timer's pill: its height in CSS pixels and its text size. */
+const TIMER_H = 24
+const TS = 13
+
+/**
+ * The keep-warm timer as a pill in the band's style. Running: a ring of the time left
+ * of the length picked, the time left in the warm colour, and the pings sent. Stopped by
+ * a guard: a cold dot, "stopped" and why.
+ */
+export const timerPillSvg = (
+  t: { leftMs: number; totalMs: number; pings: number } | { note: string },
+): { source: string; w: number; h: number; alt: string } => {
+  const cy = TIMER_H / 2
+  const base = cy + (TS * CAP) / 2
+  const x0 = 26
+  const spans: Span[] =
+    'note' in t
+      ? [
+          { s: 'stopped', size: TS, weight: 600, fill: PAL.cold, ls: 0, dx: 0 },
+          { s: t.note, size: TS, weight: 500, fill: PAL.muted, ls: 0, dx: 5 },
+        ]
+      : [
+          { s: shortSpan(t.leftMs), size: TS, weight: 600, fill: PAL.warm, ls: 0, dx: 0 },
+          { s: 'left', size: TS, weight: 500, fill: PAL.muted, ls: 0, dx: 4 },
+          ...(t.pings > 0
+            ? [
+                { s: '·', size: TS, weight: 500 as const, fill: PAL.muted, ls: 0, dx: 5 },
+                { s: `${t.pings} ping${t.pings === 1 ? '' : 's'}`, size: TS, weight: 500 as const, fill: PAL.muted, ls: 0, dx: 5 },
+              ]
+            : []),
+        ]
+  const W = Math.ceil(x0 + spansW(spans) + 10)
+  const R = 6
+  const ring = (frac: number): string => {
+    const len = 2 * Math.PI * R
+    return (
+      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.track}" stroke-width="3"/>` +
+      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.warm}" stroke-width="3.2" stroke-linecap="round"` +
+      ` stroke-dasharray="${n2(Math.max(0.01, frac) * len)} ${n2(len)}" transform="rotate(-90 13 ${cy})"/>`
+    )
+  }
+  const mark = 'note' in t ? `<circle cx="13" cy="${cy}" r="4" fill="${PAL.cold}"/>` : ring(t.totalMs > 0 ? Math.min(1, t.leftMs / t.totalMs) : 0)
+  const body =
+    `<rect x="0.5" y="0.5" width="${W - 1}" height="${TIMER_H - 1}" rx="${(TIMER_H - 1) / 2}" fill="${CHIP_FILL}" fill-opacity="0.06" stroke="${CHIP_FILL}" stroke-opacity="0.08"/>` +
+    mark +
+    line(x0, base, spans)
+  const alt = 'note' in t ? `Keep warm stopped: ${t.note}.` : `Keep warm: ${shortSpan(t.leftMs)} left, ${t.pings} pings sent.`
+  return { source: svgDoc(W, TIMER_H, body), w: W, h: TIMER_H, alt }
 }

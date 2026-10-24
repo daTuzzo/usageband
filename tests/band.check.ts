@@ -27,6 +27,7 @@ const v: BandView = {
   cacheRead: 45_800_000,
   cacheWrite: 1_270_000,
   agents: [],
+  agentRuns: 0,
   mascot: false,
 }
 

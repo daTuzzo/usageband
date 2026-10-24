@@ -46,11 +46,15 @@ declare module "claude-code" {
       mascot: boolean
       /** The keep-warm timer, or null while it has never been switched on. */
       keepWarm: KeepWarm | null
+      /** The keep-warm length picked, in hours; the Keep warm button starts a timer this long. Kept in $.store. */
+      warmHours: number
       /**
        * The keep-warm picker's hours field: null while closed; open once "custom" is picked,
        * holding the hint drawn beside it ('' for none, a range after a length out of it).
        */
       askHours: string | null
+      /** The folder holding this session's subagent records (agent-<id>.meta.json), once a hook has named it. */
+      subagentDir: string | null
       /** What the update check found, or null before its first run. */
       release: UsagebandRelease | null
     }

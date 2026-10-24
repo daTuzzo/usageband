@@ -1,5 +1,6 @@
-// The open menu's header, drawn through the engine on each surface, which checks every
-// tree against that surface's elements. Run: claude plugin test
+// The open menu, drawn through the engine on each surface, which checks every tree
+// against that surface's elements: the details header's controls and the subagents'
+// names. Run: claude plugin test
 import { expect, test } from 'claude-code/testing'
 
 const BAND = {
@@ -18,10 +19,16 @@ const USAGE = {
   cost: { usd: 12.5 },
 }
 
+/** A subagent's record on disk, as the engine writes it beside the session's transcript. */
+const RECORD = '{"agentType":"Explore","description":"Count the md files in the repo","name":"counter"}'
+
+const USED = { model: 'claude-opus-5-5', input_tokens: 100, output_tokens: 20_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+
 type Ui = Awaited<ReturnType<Parameters<Parameters<typeof test>[1]>[0]['ui']['mount']>>
 const props = async (ui: Ui, key: string) => (await ui.find({ key }))?.props
+const svgs = async (ui: Ui) => (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string; isInteractive?: boolean })
 
-test('keep warm is a picker with presets and custom; the mascot is an icon button', async ($, on) => {
+test('the details header: keep warm button and length, timer pill, mascot drawn', async ($, on) => {
   // Nothing sits beneath the plugin: each hook here stands for the engine.
   const now = Date.parse('2026-10-24T12:00:00Z')
   on('clock.now', () => ({ value: now }))
@@ -39,7 +46,7 @@ test('keep warm is a picker with presets and custom; the mascot is an icon butto
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('agent.list', () => ({ value: [] }))
   on('http.fetch', () => ({ value: { ok: false, status: 503, text: '' } }))
-  on('fs.read', () => ({ value: '{ "version": "0.19.0" }' }))
+  on('fs.read', () => ({ value: '{ "version": "0.20.0" }' }))
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
@@ -47,42 +54,104 @@ test('keep warm is a picker with presets and custom; the mascot is an icon butto
     const ui = await $.ui.mount({ ...BAND, surface })
     await ui.drawn() // rejects when the surface refuses the tree
 
+    // The picker sets the length only: 8h until another is picked, and nothing starts.
     const values = (p: Record<string, unknown> | undefined) => (p?.options as { value: string }[]).map(o => o.value)
-    expect(values(await props(ui, 'usageband-keepwarm'))).toEqual(['off', '4', '8', '12', '24', 'custom'])
-    expect((await props(ui, 'usageband-keepwarm'))?.value).toBe('off')
+    expect(values(await props(ui, 'usageband-warm-hours'))).toEqual(['4', '8', '12', '24', 'custom'])
+    expect((await props(ui, 'usageband-warm-hours'))?.value).toBe('8')
+    await ui.select({ key: 'usageband-warm-hours', value: '24' })
+    expect((await props(ui, 'usageband-warm-hours'))?.value).toBe('24')
+    expect((await props(ui, 'usageband-keepwarm'))?.variant).toBeUndefined()
+    expect((await svgs(ui)).some(s => s.alt.startsWith('Keep warm'))).toBe(false)
 
-    await ui.select({ key: 'usageband-keepwarm', value: '24' })
-    expect((await props(ui, 'usageband-keepwarm'))?.value).toBe('24')
-    expect((await ui.find({ type: 'Text', text: /left$/ }))?.text).toMatch(/^(1d|24h|23h)/)
+    // The button starts it: primary while it runs, and the timer pill shows the time left.
+    await ui.press({ key: 'usageband-keepwarm' })
+    expect((await props(ui, 'usageband-keepwarm'))?.label).toBe('Keep warm')
+    expect((await props(ui, 'usageband-keepwarm'))?.variant).toBe('primary')
+    const pill = (await svgs(ui)).find(s => s.alt.startsWith('Keep warm'))
+    expect(pill?.alt).toBe('Keep warm: 1d0h left, 0 pings sent.')
+    expect(pill?.source).toContain('stroke-dasharray')
 
-    // Custom opens the hours field; a length out of range shows the range; a good one runs.
-    await ui.select({ key: 'usageband-keepwarm', value: 'custom' })
+    // Custom: a length out of range shows the range; a good one is picked and the field closes.
+    await ui.select({ key: 'usageband-warm-hours', value: 'custom' })
     expect(await ui.find({ key: 'usageband-hours' })).toBeDefined()
     await ui.input({ key: 'usageband-hours', text: '200' })
     expect((await ui.find({ type: 'Text', text: /to 72 hours/ }))?.text).toBe('1 to 72 hours')
     await ui.input({ key: 'usageband-hours', text: '6h' })
     expect(await ui.find({ key: 'usageband-hours' })).toBeUndefined()
-    expect((await props(ui, 'usageband-keepwarm'))?.value).toBe('6')
-    expect(values(await props(ui, 'usageband-keepwarm'))).toEqual(['off', '4', '6', '8', '12', '24', 'custom'])
+    expect((await props(ui, 'usageband-warm-hours'))?.value).toBe('6')
+    expect(values(await props(ui, 'usageband-warm-hours'))).toEqual(['4', '6', '8', '12', '24', 'custom'])
+    expect((await svgs(ui)).find(s => s.alt.startsWith('Keep warm'))?.alt).toBe('Keep warm: 6h00 left, 0 pings sent.')
 
-    await ui.select({ key: 'usageband-keepwarm', value: 'off' })
-    expect((await props(ui, 'usageband-keepwarm'))?.value).toBe('off')
-    expect(await ui.find({ type: 'Text', text: /left$/ })).toBeUndefined()
+    // A second press stops it.
+    await ui.press({ key: 'usageband-keepwarm' })
+    expect((await props(ui, 'usageband-keepwarm'))?.variant).toBeUndefined()
+    expect((await svgs(ui)).some(s => s.alt.startsWith('Keep warm'))).toBe(false)
+    await ui.select({ key: 'usageband-warm-hours', value: '8' })
 
-    // The mascot button: the glyph alone, dim while off, primary while on.
-    const off = await props(ui, 'usageband-mascot')
-    expect([off?.label, off?.dimColor, off?.variant]).toEqual(['\u{1F9D4}', true, undefined])
+    // The mascot button: the drawn portrait, a transparent Button over it.
+    expect((await svgs(ui)).find(s => s.alt.startsWith('Mascot'))?.alt).toBe('Mascot off')
+    expect((await props(ui, 'usageband-mascot'))?.plain).toBe(true)
+    expect(String((await props(ui, 'usageband-mascot'))?.label).trim()).toBe('')
     await ui.press({ key: 'usageband-mascot' })
-    expect((await props(ui, 'usageband-mascot'))?.variant).toBe('primary')
+    expect((await svgs(ui)).find(s => s.alt.startsWith('Mascot'))?.alt).toBe('Mascot on')
     await ui.press({ key: 'usageband-mascot' })
     await ui.unmount()
   }
 
-  // The phone app has no Select: keep warm falls back to a button that steps.
+  // The phone app has no Select: the button runs the length last picked.
   const phone = await $.ui.mount({ ...BAND, surface: 'mobile' })
   await phone.drawn()
-  expect((await props(phone, 'usageband-keepwarm'))?.label).toBe('keep warm off')
+  expect(await phone.find({ key: 'usageband-warm-hours' })).toBeUndefined()
   await phone.press({ key: 'usageband-keepwarm' })
-  expect((await props(phone, 'usageband-keepwarm'))?.label).toBe('keep warm 4h')
+  expect((await svgs(phone)).find(s => s.alt.startsWith('Keep warm'))?.alt).toBe('Keep warm: 8h00 left, 0 pings sent.')
+  await phone.press({ key: 'usageband-keepwarm' })
   await phone.unmount()
+})
+
+test('subagents are named from their spawn, else their record; the rest are one unnamed entry', async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2026-10-24T12:00:00Z') }))
+  on('clock.every', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'band' } }))
+  on('store.get', (_, e) => ({ value: e.key === 'view' ? 'open' : undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('session.usage', () => ({ value: USAGE }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('agent.list', () => ({ value: [] }))
+  on('http.fetch', () => ({ value: { ok: false, status: 503, text: '' } }))
+  // Only "a-old" has a record; "a-fork" (an engine run) has none.
+  on('fs.read', (_, e) => {
+    if (e.path.endsWith('agent-a-old.meta.json')) return { value: RECORD }
+    if (e.path.endsWith('plugin.json')) return { value: '{ "version": "0.20.0" }' }
+    throw new Error('no such file')
+  })
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a-new' }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.SessionStart', () => ({}))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.classic.SessionStart({ source: 'startup', transcript_path: 'C:\\Users\\me\\.claude\\projects\\p\\s1.jsonl' })
+  await $.agent.spawn({
+    tool_use_id: 'toolu_1', prompt: 'Build it', description: 'Build usage band variant E', subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: true, fork: false,
+  })
+  for (const agentId of ['a-new', 'a-old', 'a-fork']) {
+    await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId: `t-${agentId}`, reason: 'answer', agentId, usage: USED })
+  }
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.drawn()
+  const card = (await svgs(ui)).find(s => s.isInteractive)
+  expect(card).toBeDefined()
+  expect(card?.source).toContain('<title>Build usage band variant E')
+  expect(card?.source).toContain('<title>Count the md files in the repo')
+  expect(card?.source).toContain('>unnamed (1)<')
+  expect(card?.source).not.toMatch(/>subagent</i)
+  expect((await ui.find({ type: 'Text', text: /3 ran/ }))?.text).toMatch(/3 ran/)
+  await ui.unmount()
 })

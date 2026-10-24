@@ -13,6 +13,8 @@ import type { CacheState, Family } from './pricing'
 export const PING_AFTER_MS = 58 * 60_000
 /** The keep-warm picker's lengths, in hours; "custom" takes any length from MIN_HOURS to MAX_HOURS. */
 export const KEEP_WARM_HOURS = [4, 8, 12, 24]
+/** The length picked until the person picks another. */
+export const DEFAULT_HOURS = 8
 export const MIN_HOURS = 1
 /** Past this, pings cost more than a cold send on every model (Fable breaks even near 72 h). */
 export const MAX_HOURS = 72
@@ -36,23 +38,24 @@ const HOUR_MS = 3_600_000
 export type CacheNow = { state: CacheState; idleMs: number; tokens: number; family: Family | null }
 
 /**
- * A length picked: the timer runs that long from now. A running timer keeps its pings and
- * what they cost, so picking again never resets the budget; a stopped one starts afresh.
+ * The timer runs `hours` from now. A running timer keeps its pings and what they cost,
+ * so a new length never resets the budget; a stopped one starts afresh.
  */
 export const startKeepWarm = (kw: KeepWarm | null, hours: number, now: number): KeepWarm =>
   kw === null || kw.until <= now
     ? { hours, until: now + hours * HOUR_MS, pings: 0, spent: 0, pendingAt: 0, note: null }
     : { ...kw, hours, until: now + hours * HOUR_MS, note: null }
 
-/** Off picked: the timer stops, with no reason to show. */
+/** The timer stops, with no reason to show. */
 export const offKeepWarm = (kw: KeepWarm | null): KeepWarm | null => (kw === null ? null : { ...kw, until: 0, pendingAt: 0, note: null })
 
-/** Where the picker cannot draw (the phone app): each press steps to the next length, then off. */
-export const nextKeepWarm = (kw: KeepWarm | null, now: number): KeepWarm | null => {
-  const running = kw !== null && kw.until > now
-  const hours = running ? KEEP_WARM_HOURS.find(h => h > kw.hours) : KEEP_WARM_HOURS[0]
-  return hours === undefined ? offKeepWarm(kw) : startKeepWarm(kw, hours, now)
-}
+/** The Keep warm button: a stopped timer starts for the picked length, a running one stops. */
+export const toggleKeepWarm = (kw: KeepWarm | null, hours: number, now: number): KeepWarm | null =>
+  kw !== null && kw.until > now ? offKeepWarm(kw) : startKeepWarm(kw, hours, now)
+
+/** A new length picked: a running timer runs that long from now; a stopped one stays stopped. */
+export const retimeKeepWarm = (kw: KeepWarm | null, hours: number, now: number): KeepWarm | null =>
+  kw !== null && kw.until > now ? startKeepWarm(kw, hours, now) : kw
 
 /** A typed length ("6", "6h", "1.5 h") in hours, or null when it is no number from MIN_HOURS to MAX_HOURS. */
 export const parseHours = (text: string): number | null => {

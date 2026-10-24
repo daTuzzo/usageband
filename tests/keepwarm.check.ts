@@ -3,7 +3,9 @@
 import assert from 'node:assert/strict'
 
 import type { KeepWarm, UsagebandLimit } from '../types'
-import { PING_AFTER_MS, keepWarmStep, nextKeepWarm, offKeepWarm, parseHours, pingCost, pingFoundCold, startKeepWarm } from '../hooks/keepwarm'
+import {
+  PING_AFTER_MS, keepWarmStep, offKeepWarm, parseHours, pingCost, pingFoundCold, retimeKeepWarm, startKeepWarm, toggleKeepWarm,
+} from '../hooks/keepwarm'
 import { CACHE_TTL_MS } from '../hooks/pricing'
 import type { Family } from '../hooks/pricing'
 
@@ -63,16 +65,18 @@ const at = (ms: number): string => `${Math.floor(ms / HOUR)}h${String(Math.floor
   console.log('custom hours: 1 to 72, "h" optional')
 }
 
-// The phone app's stepping button: off, 4 h, 8 h, 12 h, 24 h, off.
+// The Keep warm button starts and stops; picking a length starts nothing, and re-times a running timer.
 {
-  const a = nextKeepWarm(null, 0)
-  const b = nextKeepWarm(a, 1000)
-  const c = nextKeepWarm(b, 2000)
-  const d = nextKeepWarm(c, 3000)
-  const e = nextKeepWarm(d, 4000)
-  assert.deepEqual([a?.hours, b?.hours, c?.hours, d?.hours, e?.until], [4, 8, 12, 24, 0])
-  assert.equal(nextKeepWarm(e, 5000)?.hours, 4, 'a press after off starts again at 4 h')
-  console.log('stepping button cycles off, 4h, 8h, 12h, 24h, off')
+  assert.equal(retimeKeepWarm(null, 12, 0), null, 'a length picked while off starts nothing')
+  const on1 = toggleKeepWarm(null, 8, 0)
+  assert.deepEqual([on1?.hours, on1?.until], [8, 8 * HOUR])
+  const longer = retimeKeepWarm({ ...on1!, pings: 2, spent: 0.3 }, 24, HOUR)
+  assert.deepEqual([longer?.hours, longer?.until, longer?.pings], [24, 25 * HOUR, 2], 'a running timer takes the new length from now')
+  const off1 = toggleKeepWarm(longer, 24, 2 * HOUR)
+  assert.equal(off1?.until, 0)
+  assert.equal(retimeKeepWarm(off1, 4, 3 * HOUR)?.until, 0, 'a stopped timer stays stopped')
+  assert.equal(toggleKeepWarm(off1, 4, 3 * HOUR)?.until, 7 * HOUR)
+  console.log('button starts and stops; a length picked starts nothing')
 }
 
 // Your session: Opus, 688k tokens in the cache.

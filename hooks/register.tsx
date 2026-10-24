@@ -3,13 +3,13 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CacheClock, KeepWarm, UsagebandAgentNames, UsagebandAgents, UsagebandCounters, UsagebandLimit, UsagebandRelease, UsagebandView } from '../types'
 import {
-  CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, PAL,
-  agentsSvg, bandSvg, fmtTok, menuPages, menuSvg, shortSpan, svgPx, tone,
+  CONTROLS_COL_CELLS, CONTROLS_ROW_CELLS, MASCOT_ICON, PAL,
+  agentsSvg, bandSvg, fmtTok, mascotIconSvg, menuPages, menuSvg, shortSpan, svgPx, timerPillSvg, tone,
 } from './art'
-import type { BandView, Gauge } from './art'
+import type { AgentCost, BandView, Gauge } from './art'
 import {
-  KEEP_WARM_HOURS, MAX_HOURS, MIN_HOURS, PING_TEXT,
-  keepWarmStep, nextKeepWarm, offKeepWarm, parseHours, pingFoundCold, startKeepWarm,
+  DEFAULT_HOURS, KEEP_WARM_HOURS, MAX_HOURS, MIN_HOURS, PING_TEXT,
+  keepWarmStep, parseHours, pingFoundCold, retimeKeepWarm, toggleKeepWarm,
 } from './keepwarm'
 import { CACHE_TTL_MS, FAMILIES, PRICES, familyFor, formatUsd, nextMessageCost, requestCost } from './pricing'
 import { CHECK_EVERY_MS, LATEST_URL, MANUAL_UPDATE, UPDATE_STEPS, isNewer, versionOf } from './update'
@@ -48,11 +48,18 @@ const mascot = atom({ plugin: 'usageband', key: 'mascot' } as const, false)
 /** The $.store key for the mascot setting; off unless chosen. */
 const STORED_MASCOT = 'showMascot'
 const keepWarm = atom({ plugin: 'usageband', key: 'keepWarm' } as const, null as KeepWarm | null)
+const warmHours = atom({ plugin: 'usageband', key: 'warmHours' } as const, DEFAULT_HOURS)
+/** The $.store key for the keep-warm length picked, so the next session starts with it. */
+const STORED_WARM_HOURS = 'keepWarmHours'
 const askHours = atom({ plugin: 'usageband', key: 'askHours' } as const, null as string | null)
+const subagentDir = atom({ plugin: 'usageband', key: 'subagentDir' } as const, null as string | null)
 /** The keep-warm picker's option that opens the hours field. */
 const CUSTOM = 'custom'
-/** A bearded face: the mascot setting's button, highlighted while the mascot shows. */
-const MASCOT_GLYPH = '\u{1F9D4}'
+/**
+ * The mascot button's label: figure spaces, which a button keeps (plain spaces collapse),
+ * so the transparent Button laid over the mascot drawing covers it.
+ */
+const MASCOT_HIT = ' '.repeat(4)
 const release = atom({ plugin: 'usageband', key: 'release' } as const, null as UsagebandRelease | null)
 
 /** The newer version waiting on GitHub, or null when this install is current or the check has not answered. */
@@ -101,29 +108,32 @@ const runUpdate = async ($: EngineInterface): Promise<void> => {
 /** Whether a main-thread turn is running; set by turn.step, cleared by turn.complete. */
 let mainTurnOpen = false
 
-/** One press of the keep-warm button where the picker cannot draw: the next length, then off. */
-const stepKeepWarm = async ($: EngineInterface): Promise<void> => {
+/** The Keep warm button: starts a timer for the length picked, or stops the one running. */
+const flipKeepWarm = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
-  await update($, keepWarm, kw => nextKeepWarm(kw, now))
+  const hours = await read($, warmHours)
+  await update($, keepWarm, kw => toggleKeepWarm(kw, hours, now))
 }
 
-/** A pick from the keep-warm picker: off, a length in hours, or custom, which opens the hours field. */
+/**
+ * A pick from the length picker: a length in hours, or custom, which opens the hours field.
+ * It only sets the length (remembered for later sessions); a running timer takes it from now.
+ */
 const pickKeepWarm = async ($: EngineInterface, value: string): Promise<void> => {
   if (value === CUSTOM) {
     await update($, askHours, () => '')
     return
   }
-  await update($, askHours, () => null)
   const hours = Number(value)
-  if (!(hours > 0)) {
-    await update($, keepWarm, offKeepWarm)
-    return
-  }
+  if (!(hours > 0)) return
+  await update($, askHours, () => null)
+  await update($, warmHours, () => hours)
+  await $.store.set(STORED_WARM_HOURS, hours)
   const now = await $.clock.now()
-  await update($, keepWarm, kw => startKeepWarm(kw, hours, now))
+  await update($, keepWarm, kw => retimeKeepWarm(kw, hours, now))
 }
 
-/** Enter in the hours field: a length in range starts the timer and closes the field; else the range shows beside it. */
+/** Enter in the hours field: a length in range is picked and the field closes; else the range shows beside it. */
 const typeHours = async ($: EngineInterface, text: string): Promise<void> => {
   const hours = parseHours(text)
   if (hours === null) {
@@ -133,14 +143,49 @@ const typeHours = async ($: EngineInterface, text: string): Promise<void> => {
   await pickKeepWarm($, String(hours))
 }
 
-/** The picker's lengths: the presets, plus a typed length while it runs, in order. */
-const keepWarmOptions = (running: number | null): { value: string; label: string }[] => [
-  { value: 'off', label: 'off' },
-  ...[...new Set(running === null ? KEEP_WARM_HOURS : [...KEEP_WARM_HOURS, running])]
-    .sort((a, b) => a - b)
-    .map(h => ({ value: String(h), label: `${h}h` })),
+/** The picker's lengths: the presets, plus a typed length once picked, in order, then custom. */
+const keepWarmOptions = (picked: number): { value: string; label: string }[] => [
+  ...[...new Set([...KEEP_WARM_HOURS, picked])].sort((a, b) => a - b).map(h => ({ value: String(h), label: `${h}h` })),
   { value: CUSTOM, label: 'custom' },
 ]
+
+// ---------- Subagent names ----------
+/**
+ * The folder of a session's subagent records, from its transcript's path:
+ * `<id>.jsonl` beside `<id>/subagents/agent-<agentId>.meta.json`.
+ */
+const subagentsDirOf = (transcriptPath: string): string | null => {
+  if (!transcriptPath.endsWith('.jsonl')) return null
+  const sep = transcriptPath.includes('\\') ? '\\' : '/'
+  return `${transcriptPath.slice(0, -'.jsonl'.length)}${sep}subagents`
+}
+
+/** Each record looked up so far: its task description, or null when it has none. Read once per agent. */
+const recordNames = new Map<string, string | null>()
+
+/**
+ * A subagent's task description from its record on disk, for one the spawn hook did not
+ * name (spawned before this version loaded). Engine runs (compaction, memory) and
+ * workflow agents have no such record, or one with no description: null.
+ */
+const nameFromRecord = async ($: EngineInterface, dir: string, agentId: string): Promise<string | null> => {
+  const known = recordNames.get(agentId)
+  if (known !== undefined) return known
+  let name: string | null = null
+  try {
+    const sep = dir.includes('\\') ? '\\' : '/'
+    const meta: unknown = JSON.parse(await $.fs.read(`${dir}${sep}agent-${agentId}.meta.json`))
+    const field = (k: string): string | null => {
+      const x = typeof meta === 'object' && meta !== null ? (meta as Record<string, unknown>)[k] : undefined
+      return typeof x === 'string' && x !== '' ? x : null
+    }
+    name = field('description') ?? field('name')
+  } catch {
+    name = null // no record, or none readable
+  }
+  recordNames.set(agentId, name)
+  return name
+}
 
 const stopKeepWarm = async ($: EngineInterface, note: string): Promise<void> => {
   await update($, keepWarm, kw => (kw === null ? null : { ...kw, until: 0, pendingAt: 0, note }))
@@ -258,14 +303,38 @@ const bandView = async ($: EngineInterface): Promise<BandView> => {
   } catch {
     spent = 0
   }
-  // Names recorded at spawn first; the engine's live list only for an agent spawned before the mod loaded.
+  // Names recorded at spawn first; then, for an agent spawned before this version loaded,
+  // the engine's list and the agent's record on disk. Runs with no name anywhere (the
+  // engine's own work) are shown together, as one "unnamed" entry.
   const names = new Map<string, string>(Object.entries(await read($, agentNames)))
-  if (Object.keys(byAgent).some(id => !names.has(id))) {
+  const nameless = (): string[] => Object.keys(byAgent).filter(id => !names.has(id))
+  if (nameless().length > 0) {
     try {
-      for (const a of await $.agent.list()) if (!names.has(a.id)) names.set(a.id, a.description || a.type)
+      for (const a of await $.agent.list()) if (!names.has(a.id) && (a.description || a.type)) names.set(a.id, a.description || a.type)
     } catch {
-      // Names are only a label: an agent no longer listed shows as "subagent".
+      // Names are only a label: the record on disk is tried next.
     }
+  }
+  const dir = await read($, subagentDir)
+  if (dir !== null) {
+    for (const id of nameless()) {
+      const name = await nameFromRecord($, dir, id)
+      if (name !== null) names.set(id, name)
+    }
+  }
+  const agents: AgentCost[] = Object.entries(byAgent).flatMap(([id, usd]) => {
+    const name = names.get(id)
+    return name === undefined ? [] : [{ name, usd, full: name }]
+  })
+  const unnamed = nameless()
+  if (unnamed.length > 0) {
+    const n = unnamed.length
+    agents.push({
+      name: `unnamed (${n})`,
+      usd: unnamed.reduce((sum, id) => sum + (byAgent[id] ?? 0), 0),
+      full: `${n} run${n === 1 ? '' : 's'} with no task name: the engine's own work (compaction, memory, summaries), or subagents from before this version loaded`,
+      dim: true,
+    })
   }
   const warm = cache === null || cache.state === 'warm'
   const tokens = cache?.tokens ?? 0
@@ -296,7 +365,8 @@ const bandView = async ($: EngineInterface): Promise<BandView> => {
     output: totals.output,
     cacheRead: totals.cacheRead,
     cacheWrite: totals.cacheWrite,
-    agents: Object.entries(byAgent).map(([id, usd]) => ({ name: names.get(id) ?? 'subagent', usd })),
+    agents,
+    agentRuns: Object.keys(byAgent).length,
     mascot: await read($, mascot),
   }
 }
@@ -367,7 +437,7 @@ const menuItems = (v: BandView): Seg[][] => {
     kv('PROMPTS', String(v.prompts)),
     kv('5H RESETS', [v.h5?.reset, v.h5?.at].filter(Boolean).join(' at ') || '--', PAL.h5),
     kv('7D RESETS', [v.d7?.reset, v.d7?.at].filter(Boolean).join(' on ') || '--', PAL.d7),
-    kv(`SUBAGENTS (${v.agents.length})`, formatUsd(sub)),
+    kv(`SUBAGENTS (${v.agentRuns})`, formatUsd(sub)),
     kv('MAIN THREAD', formatUsd(Math.max(0, v.usd - sub))),
     ...[...v.agents].sort((a, b) => b.usd - a.usd).slice(0, 3).map(g => kv(g.name.slice(0, 32), formatUsd(g.usd), PAL.muted)),
   ]
@@ -403,6 +473,8 @@ export const register: Register = on => {
     const stored = await $.store.get(STORED_VIEW)
     if (isView(stored)) await update($, view, () => stored)
     if ((await $.store.get(STORED_MASCOT)) === true) await update($, mascot, () => true)
+    const storedHours = await $.store.get(STORED_WARM_HOURS)
+    if (typeof storedHours === 'number' && storedHours >= MIN_HOURS && storedHours <= MAX_HOURS) await update($, warmHours, () => storedHours)
     await syncLimits($)
     // /band shows a hidden band, or hides a shown one.
     await $.command.register({ name: 'band', description: 'Show or hide the usage band' })
@@ -435,6 +507,9 @@ export const register: Register = on => {
   // or forked session arrives with its idle time and context size, so the clock picks up there.
   on('classic.SessionStart', async ($, begin, next) => {
     const answer = await next(begin)
+    // Where this session's subagent records are, to name a subagent the spawn hook missed.
+    const dir = subagentsDirOf(begin.transcript_path)
+    if (dir !== null) await update($, subagentDir, () => dir)
     if (begin.source === 'clear') {
       await update($, counters, () => NO_COUNTS)
       await update($, agentSpend, () => ({}))
@@ -521,6 +596,15 @@ export const register: Register = on => {
     return result
   }).catch(($, spawn, next) => next(spawn)) // naming never blocks a spawn
 
+  // A subagent starting names the folder of the session's subagent records, so a session
+  // already running when this version loaded can name the subagents it had before.
+  on('classic.SubagentStart', async ($, start, next) => {
+    const answer = await next(start)
+    const dir = subagentsDirOf(start.transcript_path)
+    if (dir !== null) await update($, subagentDir, () => dir)
+    return answer
+  }).catch(($, start, next) => next(start))
+
   on('command.run', { command: 'band' }, async $ => {
     await setView($, x => (x === 'mini' ? 'band' : 'mini'))
     return (await read($, view)) === 'mini'
@@ -592,6 +676,14 @@ export const register: Register = on => {
     const nowMs = await $.clock.now()
     const warmLeftMs = kw !== null && kw.until > nowMs ? kw.until - nowMs : 0
     const ask = await read($, askHours)
+    const hours = await read($, warmHours)
+    const timer =
+      warmLeftMs > 0 && kw
+        ? timerPillSvg({ leftMs: warmLeftMs, totalMs: kw.hours * 3_600_000, pings: kw.pings })
+        : kw?.note
+          ? timerPillSvg({ note: kw.note })
+          : null
+    const face = mascotIconSvg(await read($, mascot))
     const rel = await read($, release)
     const newer = pendingUpdate(rel)
 
@@ -608,7 +700,7 @@ export const register: Register = on => {
     // Box may shrink below that, so the image scales down and the controls never clip.
     const Svg = ev.surface !== 'terminal' && 'Svg' in kit ? kit.Svg : null
     // The phone app draws no Select or Input (its kit lists them, and draws nothing): there
-    // keep-warm falls back to a button that steps. Decide by the surface, as for Svg.
+    // the Keep warm button runs the length last picked. Decide by the surface, as for Svg.
     const Select = ev.surface !== 'mobile' && 'Select' in kit ? kit.Select : null
     const Input = ev.surface !== 'mobile' && 'Input' in kit ? kit.Input : null
     if (Svg) {
@@ -651,44 +743,43 @@ export const register: Register = on => {
                 {newer !== null && !rel?.note?.startsWith('updated') ? (
                   <Button key="usageband-update" label={`update to ${newer}`} onPress={() => void runUpdate($)} />
                 ) : null}
-                {/* Keep-warm: a picker of lengths (off, 4h to 24h, custom), the time left beside it.
-                    Custom opens an hours field; after a guard stops the timer, the reason shows instead. */}
+                {/* The time left as a pill: a ring of what is left and the figure; or why a guard stopped it.
+                    It comes first, so the controls after it never move when it appears. */}
+                {timer ? (
+                  <Box key="timer" flexShrink={0}>
+                    <Svg source={timer.source} alt={timer.alt} width={timer.w} height={timer.h} />
+                  </Box>
+                ) : null}
+                {/* Keep-warm: the button starts and stops the timer (the app's primary look while it
+                    runs); the picker beside it only sets the length. Custom opens an hours field. */}
+                <Button
+                  key="usageband-keepwarm"
+                  label="Keep warm"
+                  {...(warmLeftMs > 0 ? { variant: 'primary' as const } : {})}
+                  onPress={() => void flipKeepWarm($)}
+                />
                 {Select ? (
                   <Select
-                    key="usageband-keepwarm"
-                    label="keep warm"
-                    options={keepWarmOptions(warmLeftMs > 0 && kw ? kw.hours : null)}
-                    value={ask !== null ? CUSTOM : warmLeftMs > 0 && kw ? String(kw.hours) : 'off'}
+                    key="usageband-warm-hours"
+                    options={keepWarmOptions(hours)}
+                    value={ask !== null ? CUSTOM : String(hours)}
                     onSelect={value => void pickKeepWarm($, value)}
                   />
-                ) : (
-                  <Button
-                    key="usageband-keepwarm"
-                    plain
-                    label={warmLeftMs > 0 && kw ? `keep warm ${kw.hours}h` : 'keep warm off'}
-                    onPress={() => void stepKeepWarm($)}
-                  />
-                )}
+                ) : null}
                 {ask !== null && Input ? (
-                  <Input key="usageband-hours" placeholder="hours" submitLabel="start" autoFocus onSubmit={text => void typeHours($, text)} />
+                  <Input key="usageband-hours" placeholder="hours" submitLabel="set" autoFocus onSubmit={text => void typeHours($, text)} />
                 ) : null}
                 {ask ? (
                   <Text key="hours-hint" color={PAL.muted} size="caption">{ask}</Text>
                 ) : null}
-                {warmLeftMs > 0 && kw ? (
-                  <Text key="kw-left" color={PAL.muted} size="caption">
-                    {`${shortSpan(warmLeftMs)} left${kw.pings > 0 ? ` · ${kw.pings} ping${kw.pings === 1 ? '' : 's'}` : ''}`}
-                  </Text>
-                ) : kw?.note ? (
-                  <Text key="kw-note" color={PAL.muted} size="caption">{`stopped: ${kw.note}`}</Text>
-                ) : null}
-                {/* The mascot setting: a bearded face, highlighted while the mascot shows, dim while it does not. */}
-                <Button
-                  key="usageband-mascot"
-                  label={MASCOT_GLYPH}
-                  {...(v.mascot ? { variant: 'primary' as const } : { dimColor: true })}
-                  onPress={() => void flipMascot($)}
-                />
+                {/* The mascot setting: the mascot itself, drawn, with a transparent Button laid over
+                    it, since a Button draws text only. Tinted while on, faded while off. */}
+                <Box key="mascot" flexShrink={0}>
+                  <Svg source={face.source} alt={face.alt} width={MASCOT_ICON} height={MASCOT_ICON} />
+                  <Box key="mascot-press" position="absolute" top={0} left={0} right={0} bottom={0} justifyContent="center">
+                    <Button key="usageband-mascot" plain label={MASCOT_HIT} onPress={() => void flipMascot($)} />
+                  </Box>
+                </Box>
               </Box>
               {image('menu-svg', m.source, m.alt)}
               {a ? (
@@ -698,7 +789,7 @@ export const register: Register = on => {
                       SUBAGENTS
                     </Text>
                     <Text color={PAL.ink} size="caption" weight="semibold">{` ${formatUsd(subTotal)}`}</Text>
-                    <Text color={PAL.muted} size="caption">{` · ${v.agents.length} ran · main ${formatUsd(Math.max(0, v.usd - subTotal))} · by cost`}</Text>
+                    <Text color={PAL.muted} size="caption">{` · ${v.agentRuns} ran · main ${formatUsd(Math.max(0, v.usd - subTotal))} · by cost`}</Text>
                     <Box key="agents-space" flexGrow={1} />
                     {a.pages > 1
                       ? [
@@ -708,7 +799,10 @@ export const register: Register = on => {
                         ]
                       : null}
                   </Box>
-                  {image('agents-svg', a.source, a.alt)}
+                  {/* Drawn interactive, so each chip's full name shows on hover; a frame needs its size given. */}
+                  <Box key="agents-svg" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                    <Svg source={a.source} alt={a.alt} width={a.w} height={a.h} isInteractive />
+                  </Box>
                 </Box>
               ) : null}
             </Box>
