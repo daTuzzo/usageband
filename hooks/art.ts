@@ -766,12 +766,12 @@ export const timerPillSvg = (
             : []),
         ]
   const W = Math.ceil(x0 + spansW(spans) + 10)
-  const R = 6.5
+  const R = 6
   const ring = (frac: number): string => {
     const len = 2 * Math.PI * R
     return (
-      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.track}" stroke-width="2.5"/>` +
-      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.warm}" stroke-width="2.5" stroke-linecap="round"` +
+      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.track}" stroke-width="3"/>` +
+      `<circle cx="13" cy="${cy}" r="${R}" fill="none" stroke="${PAL.warm}" stroke-width="3.2" stroke-linecap="round"` +
       ` stroke-dasharray="${n2(Math.max(0.01, frac) * len)} ${n2(len)}" transform="rotate(-90 13 ${cy})"/>`
     )
   }

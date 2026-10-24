@@ -743,6 +743,13 @@ export const register: Register = on => {
                 {newer !== null && !rel?.note?.startsWith('updated') ? (
                   <Button key="usageband-update" label={`update to ${newer}`} onPress={() => void runUpdate($)} />
                 ) : null}
+                {/* The time left as a pill: a ring of what is left and the figure; or why a guard stopped it.
+                    It comes first, so the controls after it never move when it appears. */}
+                {timer ? (
+                  <Box key="timer" flexShrink={0}>
+                    <Svg source={timer.source} alt={timer.alt} width={timer.w} height={timer.h} />
+                  </Box>
+                ) : null}
                 {/* Keep-warm: the button starts and stops the timer (the app's primary look while it
                     runs); the picker beside it only sets the length. Custom opens an hours field. */}
                 <Button
@@ -764,12 +771,6 @@ export const register: Register = on => {
                 ) : null}
                 {ask ? (
                   <Text key="hours-hint" color={PAL.muted} size="caption">{ask}</Text>
-                ) : null}
-                {/* The time left as a pill: a ring of what is left and the figure; or why a guard stopped it. */}
-                {timer ? (
-                  <Box key="timer" flexShrink={0}>
-                    <Svg source={timer.source} alt={timer.alt} width={timer.w} height={timer.h} />
-                  </Box>
                 ) : null}
                 {/* The mascot setting: the mascot itself, drawn, with a transparent Button laid over
                     it, since a Button draws text only. Tinted while on, faded while off. */}
