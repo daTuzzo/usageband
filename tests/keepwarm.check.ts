@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 
 import type { KeepWarm, UsagebandLimit } from '../types'
-import { PING_AFTER_MS, keepWarmStep, nextKeepWarm, pingCost, pingFoundCold } from '../hooks/keepwarm'
+import { PING_AFTER_MS, keepWarmStep, nextKeepWarm, offKeepWarm, parseHours, pingCost, pingFoundCold, startKeepWarm } from '../hooks/keepwarm'
 import { CACHE_TTL_MS } from '../hooks/pricing'
 import type { Family } from '../hooks/pricing'
 
@@ -39,15 +39,40 @@ const simulate = (kw: KeepWarm, family: Family, tokens: number, limits = OK_LIMI
 const on = (hours: number): KeepWarm => ({ hours, until: hours * HOUR, pings: 0, spent: 0, pendingAt: 0, note: null })
 const at = (ms: number): string => `${Math.floor(ms / HOUR)}h${String(Math.floor((ms % HOUR) / MIN)).padStart(2, '0')}`
 
-// The button: off, 2 h, 4 h, 8 h, off.
+// The picker: a length runs from now; picking again keeps the budget used; off stops it.
+{
+  const a = startKeepWarm(null, 8, 0)
+  assert.deepEqual([a.hours, a.until, a.pings, a.spent], [8, 8 * HOUR, 0, 0])
+  const b = startKeepWarm({ ...a, pings: 3, spent: 0.42 }, 24, HOUR)
+  assert.deepEqual([b.hours, b.until, b.pings, b.spent], [24, 25 * HOUR, 3, 0.42], 'a running timer keeps its pings and spend')
+  const c = offKeepWarm(b)
+  assert.deepEqual([c?.until, c?.note], [0, null])
+  const d = startKeepWarm({ ...b, until: 0, note: 'budget used' }, 4, 2 * HOUR)
+  assert.deepEqual([d.pings, d.spent, d.note], [0, 0, null], 'a stopped timer starts afresh')
+  assert.equal(offKeepWarm(null), null)
+  console.log('picker: a length starts, a re-pick keeps the budget, off stops')
+}
+
+// Custom lengths: whole or decimal hours, an optional "h", from 1 to 72.
+{
+  const cases: [string, number | null][] = [
+    ['6', 6], ['6h', 6], [' 12 H ', 12], ['1.5', 1.5], ['2,5h', 2.5], ['72', 72],
+    ['0.5', null], ['73', null], ['', null], ['abc', null], ['-3', null], ['6 hours', null],
+  ]
+  for (const [text, want] of cases) assert.equal(parseHours(text), want, `parseHours(${JSON.stringify(text)})`)
+  console.log('custom hours: 1 to 72, "h" optional')
+}
+
+// The phone app's stepping button: off, 4 h, 8 h, 12 h, 24 h, off.
 {
   const a = nextKeepWarm(null, 0)
   const b = nextKeepWarm(a, 1000)
   const c = nextKeepWarm(b, 2000)
   const d = nextKeepWarm(c, 3000)
-  assert.deepEqual([a.hours, b.hours, c.hours, d.until], [2, 4, 8, 0])
-  assert.equal(nextKeepWarm(d, 4000).hours, 2, 'a press after off starts again at 2 h')
-  console.log('button cycles off, 2h, 4h, 8h, off')
+  const e = nextKeepWarm(d, 4000)
+  assert.deepEqual([a?.hours, b?.hours, c?.hours, d?.hours, e?.until], [4, 8, 12, 24, 0])
+  assert.equal(nextKeepWarm(e, 5000)?.hours, 4, 'a press after off starts again at 4 h')
+  console.log('stepping button cycles off, 4h, 8h, 12h, 24h, off')
 }
 
 // Your session: Opus, 688k tokens in the cache.
@@ -65,12 +90,20 @@ const at = (ms: number): string => `${Math.floor(ms / HOUR)}h${String(Math.floor
   console.log(`opus 688k, 8h timer: ${r.pings.length} pings, $${r.spent.toFixed(2)} (one cold send costs $5.50), stops: ${r.stop}`)
 }
 
-// The budget stops it before the timer: Sonnet re-caches for less, so half a cold send is fewer pings.
+// The longest preset runs its full length on Opus.
 {
-  const r = simulate({ ...on(8), until: 100 * HOUR }, 'sonnet', 688_000, OK_LIMITS, 100)
+  const r = simulate(on(24), 'opus', 688_000, OK_LIMITS, 24)
+  assert.equal(r.pings.length, 24)
+  assert.equal(r.stop, 'timer done')
+  console.log(`opus 688k, 24h timer: ${r.pings.length} pings, $${r.spent.toFixed(2)} (one cold send costs $5.50), stops: ${r.stop}`)
+}
+
+// The budget stops a timer at break-even: past it, letting the cache go cold is cheaper.
+for (const [family, coldUsd] of [['opus', 5.504], ['sonnet', 2.752]] as const) {
+  const r = simulate({ ...on(72), until: 100 * HOUR }, family, 688_000, OK_LIMITS, 100)
   assert.equal(r.stop, 'budget used')
-  assert.ok(r.spent <= 2.75 / 2 + 1e-9, 'never spends more than half a cold send')
-  console.log(`sonnet 688k, long timer: ${r.pings.length} pings, $${r.spent.toFixed(2)}, stops: ${r.stop}`)
+  assert.ok(r.spent <= coldUsd + 1e-9, 'never spends more than one cold send')
+  console.log(`${family} 688k, long timer: ${r.pings.length} pings (${at(r.pings.at(-1) ?? 0)}), $${r.spent.toFixed(2)}, stops: ${r.stop}`)
 }
 
 // Small contexts are not worth keeping.

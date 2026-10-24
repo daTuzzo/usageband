@@ -43,25 +43,25 @@ The status part shows how much of the 5-hour and 7-day limits is used (as Claude
 | expand / collapse | Footer | Shows or hides the band |
 | ▴ / ▾ | Band | Opens or closes the details menu |
 | ━ | Band | Hides the band |
-| keep warm | Details header | Steps the keep-warm timer: off, 2 h, 4 h, 8 h, off |
-| mascot on/off | Details header | Shows or hides the mascot |
+| keep warm | Details header | Picks the keep-warm timer: off, 4h, 8h, 12h, 24h, or custom (1 to 72 hours) |
+| 🧔 | Details header | Shows or hides the mascot; highlighted while it shows |
 | `/band` | Prompt | Shows or hides the band |
 
 ## Keep warm
 
 A cold cache makes the next message re-write the whole context at twice the input price. A warm one only reads it. On Opus, one cold send costs as much as about 40 reads, so keeping the cache warm while you step away is cheap next to coming back to a cold one.
 
-Press **keep warm** in the details header to start a timer (2 h, 4 h or 8 h). Until it runs out, the mod sends one short line ("cache ping, reply ok") as soon as 2 minutes or less are left on the 1-hour cache (58 minutes after the last request). It checks every 10 seconds, so it has 12 chances to catch that window. The footer shows `kw` while it runs, and the button counts down.
+Pick a length in the **keep warm** picker in the details header: 4h, 8h, 12h or 24h, or **custom** to type any number of hours from 1 to 72 and press Enter. Until the timer runs out, the mod sends one short line ("cache ping, reply ok") as soon as 2 minutes or less are left on the 1-hour cache (58 minutes after the last request). It checks every 10 seconds, so it has 12 chances to catch that window. The footer shows `kw` while it runs, and the time left shows beside the picker. Pick **off** to stop it. The phone app has no picker: there the button steps through the lengths.
 
 It stops on its own, and shows why, when:
 
 - the timer runs out;
-- the pings have cost half of one cold send (so the worst case loses half of one);
+- the pings have cost as much as one cold send (past that, letting the cache go cold is cheaper: about 38 h of pings on Opus, 18 h on Sonnet);
 - a cold send would cost under $1 (small contexts are not worth keeping);
 - the 5-hour limit is over 90% used or the 7-day limit over 95%;
 - a ping wrote the cache instead of reading it (the cache had already expired, or the session is on the 5-minute cache of usage overage).
 
-It never pings while a turn is running, and pings do not count as your prompts. Check the logic: `npx -y tsx tests/keepwarm.check.ts`.
+It never pings while a turn is running, and pings do not count as your prompts. Check the logic: `npx -y tsx tests/keepwarm.check.ts`. Check the menu's controls on each surface: `claude plugin test`.
 
 ## Install
 

@@ -21,9 +21,9 @@ export type UsagebandAgentNames = Record<string, string>
 export type UsagebandView = 'mini' | 'band' | 'open'
 
 /**
- * Keep-warm, for this session only: pings the main thread one minute before the
+ * Keep-warm, for this session only: pings the main thread two minutes before the
  * 1-hour cache expires, until `until` (clock milliseconds; 0 once stopped). `hours`
- * is the timer chosen, `pings` and `spent` (dollars) what it has used, `pendingAt`
+ * is the length picked, `pings` and `spent` (dollars) what it has used, `pendingAt`
  * when the ping in flight went out (0 for none), and `note` why it stopped.
  */
 export type KeepWarm = { hours: number; until: number; pings: number; spent: number; pendingAt: number; note: string | null }
@@ -46,6 +46,11 @@ declare module "claude-code" {
       mascot: boolean
       /** The keep-warm timer, or null while it has never been switched on. */
       keepWarm: KeepWarm | null
+      /**
+       * The keep-warm picker's hours field: null while closed; open once "custom" is picked,
+       * holding the hint drawn beside it ('' for none, a range after a length out of it).
+       */
+      askHours: string | null
       /** What the update check found, or null before its first run. */
       release: UsagebandRelease | null
     }

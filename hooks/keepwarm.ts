@@ -11,12 +11,18 @@ import type { CacheState, Family } from './pricing'
  * left on the 1-hour cache. On a 10-second tick that gives 12 chances before it expires.
  */
 export const PING_AFTER_MS = 58 * 60_000
-/** Each press of the keep-warm button steps through these timers, in hours, then off. */
-export const KEEP_WARM_HOURS = [2, 4, 8]
+/** The keep-warm picker's lengths, in hours; "custom" takes any length from MIN_HOURS to MAX_HOURS. */
+export const KEEP_WARM_HOURS = [4, 8, 12, 24]
+export const MIN_HOURS = 1
+/** Past this, pings cost more than a cold send on every model (Fable breaks even near 72 h). */
+export const MAX_HOURS = 72
 /** Below this cold-send price the cache is not worth keeping. */
 export const MIN_COLD_USD = 1
-/** Pings stop once they have cost this share of one cold send, so the worst case loses half of one. */
-export const BUDGET_SHARE = 0.5
+/**
+ * Pings stop once they have cost this share of one cold send: past it, letting the cache
+ * go cold is cheaper. On Opus that is about 38 h of pings, on Sonnet about 18 h.
+ */
+export const BUDGET_SHARE = 1
 /** No pings while a limit has less than this percent left. */
 export const MIN_5H_LEFT = 10
 export const MIN_7D_LEFT = 5
@@ -29,12 +35,31 @@ const HOUR_MS = 3_600_000
 /** The cache as keep-warm needs it: warm or cold, time since the last send, its size and model. */
 export type CacheNow = { state: CacheState; idleMs: number; tokens: number; family: Family | null }
 
-/** One press: off, then 2 h, 4 h, 8 h, then off again. Each press restarts the timer from now. */
-export const nextKeepWarm = (kw: KeepWarm | null, now: number): KeepWarm => {
-  const first = KEEP_WARM_HOURS[0] ?? 2
-  if (kw === null || kw.until <= now) return { hours: first, until: now + first * HOUR_MS, pings: 0, spent: 0, pendingAt: 0, note: null }
-  const hours = KEEP_WARM_HOURS.find(h => h > kw.hours)
-  return hours === undefined ? { ...kw, until: 0, pendingAt: 0, note: null } : { ...kw, hours, until: now + hours * HOUR_MS, note: null }
+/**
+ * A length picked: the timer runs that long from now. A running timer keeps its pings and
+ * what they cost, so picking again never resets the budget; a stopped one starts afresh.
+ */
+export const startKeepWarm = (kw: KeepWarm | null, hours: number, now: number): KeepWarm =>
+  kw === null || kw.until <= now
+    ? { hours, until: now + hours * HOUR_MS, pings: 0, spent: 0, pendingAt: 0, note: null }
+    : { ...kw, hours, until: now + hours * HOUR_MS, note: null }
+
+/** Off picked: the timer stops, with no reason to show. */
+export const offKeepWarm = (kw: KeepWarm | null): KeepWarm | null => (kw === null ? null : { ...kw, until: 0, pendingAt: 0, note: null })
+
+/** Where the picker cannot draw (the phone app): each press steps to the next length, then off. */
+export const nextKeepWarm = (kw: KeepWarm | null, now: number): KeepWarm | null => {
+  const running = kw !== null && kw.until > now
+  const hours = running ? KEEP_WARM_HOURS.find(h => h > kw.hours) : KEEP_WARM_HOURS[0]
+  return hours === undefined ? offKeepWarm(kw) : startKeepWarm(kw, hours, now)
+}
+
+/** A typed length ("6", "6h", "1.5 h") in hours, or null when it is no number from MIN_HOURS to MAX_HOURS. */
+export const parseHours = (text: string): number | null => {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*h?\s*$/i.exec(text)
+  if (m === null || m[1] === undefined) return null
+  const hours = Math.round(Number(m[1].replace(',', '.')) * 10) / 10
+  return hours >= MIN_HOURS && hours <= MAX_HOURS ? hours : null
 }
 
 /** What one ping costs: a read of the whole cache, plus its own line in and a one-word reply out. */
