@@ -7,7 +7,7 @@ const BAND = {
   plugin: 'usageband',
   component: 'AbovePrompt',
   requestId: 'band',
-  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
 const USAGE = {
@@ -166,6 +166,72 @@ test('subagents are named from spawn, record or prompt; the rest show by model, 
   await ui.press({ key: 'usageband-unnamed' })
   expect((await card()).match(/>Opus run</g)?.length).toBe(2)
   await ui.unmount()
+})
+
+test("the open menu fits the band's slot: whole, else two tabs, else three", async ($, on) => {
+  on('clock.now', () => ({ value: Date.parse('2026-10-24T12:00:00Z') }))
+  on('clock.every', () => ({ value: undefined }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: { command: 'band' } }))
+  on('store.get', (_, e) => ({ value: e.key === 'view' ? 'open' : undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('session.usage', () => ({ value: USAGE }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('agent.list', () => ({ value: [] }))
+  on('http.fetch', () => ({ value: { ok: false, status: 503, text: '' } }))
+  on('fs.read', () => ({ value: '{ "version": "0.22.0" }' }))
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a-1' }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({
+    tool_use_id: 'toolu_3', prompt: 'Look', description: 'Fresh visual review', subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: true, fork: false,
+  })
+  await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId: 't-1', reason: 'answer', agentId: 'a-1', usage: USED })
+
+  const mountAt = (bodyColumns: number) => $.ui.mount({ ...BAND, requestId: `band-${bodyColumns}`, props: { ...BAND.props, bodyColumns }, surface: 'desktop' })
+  const parts = async (ui: Ui) => {
+    const all = await svgs(ui)
+    return { figures: all.find(s => s.alt.startsWith('Tokens') || s.alt.startsWith('Next') || s.alt.startsWith('5H resets') || s.alt.includes('in cache')), agents: all.find(s => s.isInteractive) }
+  }
+  const tabKeys = async (ui: Ui) => (await ui.findAll({ type: 'Button' })).map(b => b.key ?? '').filter(k => k.startsWith('usageband-tab-'))
+
+  // Wide: the whole menu, its label, no tabs.
+  const wide = await mountAt(100)
+  expect(await tabKeys(wide)).toEqual([])
+  expect(await wide.find({ type: 'Text', text: 'DETAILS' })).toBeDefined()
+  expect((await parts(wide)).figures).toBeDefined()
+  expect((await parts(wide)).agents).toBeDefined()
+  await wide.unmount()
+
+  // Narrower: two tabs, the figures first; the subagents tab swaps them.
+  const mid = await mountAt(72)
+  expect(await tabKeys(mid)).toEqual(['usageband-tab-figures', 'usageband-tab-agents'])
+  expect((await props(mid, 'usageband-tab-figures'))?.plain).toBeUndefined()
+  expect((await props(mid, 'usageband-tab-agents'))?.plain).toBe(true)
+  expect((await parts(mid)).agents).toBeUndefined()
+  await mid.press({ key: 'usageband-tab-agents' })
+  expect((await parts(mid)).agents).toBeDefined()
+  expect((await parts(mid)).figures).toBeUndefined()
+  await mid.press({ key: 'usageband-tab-figures' })
+  await mid.unmount()
+
+  // Narrowest: the figures split in two; picking a half shows its own figures.
+  const narrow = await mountAt(55)
+  expect(await tabKeys(narrow)).toEqual(['usageband-tab-tokens', 'usageband-tab-cache', 'usageband-tab-agents'])
+  const shown = async () => (await svgs(narrow)).filter(s => !s.isInteractive).map(s => s.source).join('')
+  expect(await shown()).toContain('>SENT<')
+  expect(await shown()).not.toContain('>LAST REPLY<')
+  await narrow.press({ key: 'usageband-tab-cache' })
+  expect(await shown()).toContain('>LAST REPLY<')
+  expect(await shown()).not.toContain('>SENT<')
+  await narrow.unmount()
 })
 
 test("a subagent's cache writes are priced at the 5-minute rate", async ($, on) => {
