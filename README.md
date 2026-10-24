@@ -9,17 +9,17 @@ Your Claude Code usage at a glance: what is left of the 5-hour and 7-day limits,
 **Footer line.** Always on, next to the model name, and it takes no space:
 
 ```
-usageband 5h 77% │ 7d 96% │ $3.42   [collapse] warm 42m
+usageband 5h 77% resets 2h41 │ 7d 96% resets 6d22h │ $3.42   [collapse] warm 42m
 ```
 
-The status part shows the 5-hour and 7-day limits left and the money spent this session. After the button, the cache shows its countdown in red while warm and its idle time in blue once cold.
+The status part shows the 5-hour and 7-day limits left, when each resets, and the money spent this session. After the button, the cache shows its countdown in red while warm and its idle time in blue once cold.
 
 **Band.** Six chips above the prompt. They reflow into rows as the pane narrows.
 
 | Chip | Shows |
 |---|---|
-| 5H | Share of the 5-hour limit left, and the time to its reset |
-| 7D | Share of the 7-day limit left, with LOW under 15% |
+| 5H | Share of the 5-hour limit left, and the time to its reset (always shown; cut to hours in tight panes) |
+| 7D | Share of the 7-day limit left, the time to its reset, and LOW under 15% |
 | Cache | Minutes left while warm (red), idle time once cold (blue) |
 | Spent | What the session has cost so far |
 | Tokens | Every token the session has processed |

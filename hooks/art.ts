@@ -26,14 +26,14 @@ export const PAL = {
 export const tone = (state: CacheState): string => (state === 'warm' ? PAL.warm : PAL.cold)
 
 // ---------- Type: one font, two sizes ----------
-const LS = 9.5 // labels: caps, weight 500, tracked
-const VS = 13 // values: weight 600, tabular figures
+const LS = 10.5 // labels: caps, weight 500, tracked
+const VS = 15 // values: weight 600, tabular figures
 const TRACK = 0.12 * LS
 const CAP = 0.7 // Outfit's cap height, in em
 
 // ---------- Geometry ----------
-const DOT_R = 1.6
-const PITCH = 5
+const DOT_R = 2
+const PITCH = 6
 const PILL_H = 10
 const PILL_X = 4
 /**
@@ -42,7 +42,7 @@ const PILL_X = 4
  * an Svg wider than its slot is scaled down (text shrinks), one narrower only
  * leaves a few pixels of slack.
  */
-export const CELL_PX_DESKTOP = 7.8
+export const CELL_PX_DESKTOP = 8
 /** The band's controls beside its Svg, in cells: stacked in a column (multi-row band), or side by side (one row). */
 export const CONTROLS_COL_CELLS = 4
 export const CONTROLS_ROW_CELLS = 8
@@ -356,15 +356,15 @@ const dotsEndingAt = (x1: number, cy: number, n: number, lit: number, fill: stri
   n > 0 ? dotRow(x1 - ((n - 1) * PITCH + 2 * DOT_R), cy, n, lit, fill) : ''
 
 // ---------- Chips: the one shape the band and the menu are built from ----------
-const B_PAD = 5
-const CHIP_GAP = 5
-const CHIP_H = 30
-const CHIP_PX = 10
-const CHIP_LABEL = 12
-const CHIP_VALUE = 25
+const B_PAD = 2
+const CHIP_GAP = 4
+const CHIP_H = 36
+const CHIP_PX = 8
+const CHIP_LABEL = 14
+const CHIP_VALUE = 30
 const CHIP_FILL = '#ffffff'
 const CHIP_ALPHA = 0.04
-const MASCOT = 18
+const MASCOT = 22
 const MIN_DOTS = 4
 const MAX_DOTS = 20
 const DOTS_MIN_W = (MIN_DOTS - 1) * PITCH + 2 * DOT_R
@@ -391,24 +391,28 @@ const plainChip = (head: Span[], value: Span[], tint?: string, pad = CHIP_PX): C
 
 /**
  * How tightly the band's chips are drawn. The band keeps six chips in one row as
- * long as any of these steps fits, giving up a little at each: first the reset and
- * TTL figures on the right, then padding and gaps, then the words after the values.
- * Only past the last step does it go to two rows, then three. The dot bars always
- * show: they shrink with the chip, down to 4 dots, but no step removes them.
+ * long as any of these steps fits, giving up a little at each: first the reset times
+ * shorten to their largest unit (and the cache's 60M goes), then padding and gaps,
+ * then the words after the values. Only past the last step does it go to two rows,
+ * then three. The dot bars and the reset times always show: no step removes them.
  */
-type Fit = { pad: number; gap: number; resets: boolean; dots: boolean; short: boolean }
+type Fit = { pad: number; gap: number; resets: 'full' | 'short'; dots: boolean; short: boolean }
 const FITS: readonly Fit[] = [
-  { pad: CHIP_PX, gap: CHIP_GAP, resets: true, dots: true, short: false },
-  { pad: CHIP_PX, gap: CHIP_GAP, resets: false, dots: true, short: false },
-  { pad: 6, gap: 4, resets: false, dots: true, short: false },
-  { pad: 6, gap: 4, resets: false, dots: true, short: true },
+  { pad: CHIP_PX, gap: CHIP_GAP, resets: 'full', dots: true, short: false },
+  { pad: CHIP_PX, gap: CHIP_GAP, resets: 'short', dots: true, short: false },
+  { pad: 5, gap: 3, resets: 'short', dots: true, short: false },
+  { pad: 5, gap: 3, resets: 'short', dots: true, short: true },
 ]
+
+/** A reset time cut to its largest unit: "2h41" becomes "2h", "6d19h" becomes "6d"; "41m" and "now" stay. */
+const shortReset = (s: string): string => /^\d+[dh]/.exec(s)?.[0] ?? s
 
 /** 5H or 7D: name and reset on the top line; percent left, a dot bar, and LOW at the right end. */
 const gaugeChip = (name: string, g: Gauge | null, fill: string, fit: Fit): Chip => {
   const head = [sLabel(name)]
   if (!g) return plainChip(head, [sSoft('--')], undefined, fit.pad)
-  const reset = fit.resets && g.reset ? [sLabel(g.reset)] : []
+  const resetText = fit.resets === 'full' ? g.reset : shortReset(g.reset)
+  const reset = resetText ? [sLabel(resetText)] : []
   const pct = [sVal(`${g.left}%`, fill)]
   const low = g.left < 15 ? pill('LOW', PAL.d7, true) : null
   const lowW = low ? low.w + 6 : 0
@@ -443,7 +447,7 @@ const cacheChip = (v: BandView, fit: Fit): Chip => {
   const head = [sLabel('cache')]
   if (!c) return plainChip(head, [sSoft('none yet')], undefined, fit.pad)
   const hue = tone(c.mode)
-  const hour = fit.resets && c.mode === 'warm' ? [sLabel('60m')] : []
+  const hour = fit.resets === 'full' && c.mode === 'warm' ? [sLabel('60m')] : []
   const value = fit.short ? [sVal(c.time, hue)] : [sVal(c.time, hue), sSoft(c.mode === 'warm' ? 'left' : 'idle', PAL.muted, 4)]
   // Where the text starts: the chip's own padding, or past the mascot when it shows.
   const inset = v.mascot ? 8 + MASCOT + 6 : fit.pad

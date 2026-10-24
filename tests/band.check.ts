@@ -1,5 +1,6 @@
-// Checks that the band never drops its dot bars: at every width, with the mascot off
-// and on, 5H, 7D and the cache each keep at least 4 dots. Run: npx -y tsx tests/band.check.ts
+// Checks that the band never drops its dot bars or its reset times: at every width, with
+// the mascot off and on, 5H, 7D and the cache each keep at least 4 dots, and 5H and 7D
+// show when they reset (in full, or cut to the largest unit). Run: npx -y tsx tests/band.check.ts
 import assert from 'node:assert/strict'
 
 import { bandSvg } from '../hooks/art'
@@ -34,6 +35,8 @@ for (const mascot of [false, true]) {
     const b = bandSvg({ ...v, mascot }, w)
     const dots = (b.source.match(/<circle/g) ?? []).length
     assert.ok(dots >= 3 * 4, `${w}px, mascot ${mascot ? 'on' : 'off'}: only ${dots} dots`)
+    assert.ok(/>5M</.test(b.source), `${w}px, mascot ${mascot ? 'on' : 'off'}: 5H reset missing`)
+    assert.ok(/>6D(19H)?</.test(b.source), `${w}px, mascot ${mascot ? 'on' : 'off'}: 7D reset missing`)
   }
 }
-console.log('the band keeps its dot bars at every width from 240 to 1200 px, mascot off and on')
+console.log('the band keeps its dot bars and reset times at every width from 240 to 1200 px, mascot off and on')
